@@ -15,6 +15,21 @@
       p { margin: 0 0 28px; }
       /* Simulates the fixed composer panel many chat/reader sites keep at the
          bottom of the viewport (Gemini, ChatGPT, YouTube comments, ...). */
+      /* Gemini-style layout: the article lives in its own scroll container and
+         window scrolling does nothing. */
+      html.inner-scroll,
+      html.inner-scroll body {
+        overflow: hidden;
+        height: 100%;
+      }
+      html.inner-scroll body {
+        padding-bottom: 24px;
+      }
+      #reader {
+        height: calc(100vh - 230px);
+        overflow-y: auto;
+        padding: 0 8px;
+      }
       #bottom-panel {
         position: fixed;
         left: 50%;
@@ -42,5 +57,16 @@
     <p id="p9">Dokuzuncu paragraf. Test sonunda takip yeniden açıldığında buraya kaydırılmalıdır.</p>
     <p id="p10">Onuncu paragraf. Son paragraf.</p>
     <div id="bottom-panel"></div>
+    <script>
+      if (new URLSearchParams(location.search).has("inner")) {
+        document.documentElement.classList.add("inner-scroll");
+        const reader = document.createElement("div");
+        reader.id = "reader";
+        for (const node of [...document.querySelectorAll("h1, p")]) {
+          reader.appendChild(node);
+        }
+        document.body.insertBefore(reader, document.getElementById("bottom-panel"));
+      }
+    </script>
   </body>
 </html>

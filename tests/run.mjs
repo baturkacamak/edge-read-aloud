@@ -188,7 +188,7 @@ async function main() {
     });
     await pageCdp.send("Runtime.enable");
 
-    const isolated = await waitFor(
+    let activeContext = await waitFor(
       "extension isolated world",
       () => contexts.find((context) => context.auxData?.type === "isolated"),
       8000
@@ -196,7 +196,7 @@ async function main() {
 
     const evalIso = async (expression, awaitPromise = false) => {
       const result = await pageCdp.send("Runtime.evaluate", {
-        contextId: isolated.id,
+        contextId: activeContext.id,
         expression,
         awaitPromise,
         returnByValue: true,
@@ -449,6 +449,118 @@ async function main() {
         approx(state.spotlightRect.top, state.wordRect.top - 5, 3)
       ),
       JSON.stringify({ word: state.wordRect, spotlight: state.spotlightRect })
+    );
+
+    // ------------------------------------------------- inner scroll container
+    // Gemini-style apps keep the article in their own overflow container and
+    // never scroll the window. window.scrollBy() is a no-op there.
+    console.log("\n  Inner scroll container");
+    const contextCount = contexts.length;
+    await pageCdp.send("Page.navigate", { url: `${fixtureUrl}&inner=1` });
+    activeContext = await waitFor(
+      "isolated world after navigation",
+      () =>
+        contexts
+          .slice(contextCount)
+          .find((context) => context.auxData?.type === "isolated"),
+      10000
+    );
+    await waitFor("test hook after navigation", async () =>
+      evalIso("typeof window.__sesliOkuTest === 'object'")
+    );
+
+    await evalIso(
+      `__sesliOkuTest.start({ voice: "tr-TR-EmelNeural", rate: 0, volume: 0, pitch: 0 })`
+    );
+    await waitFor("inner player UI", async () => (await snapshot()).hosts >= 1);
+    await evalIso("__sesliOkuTest.pause()");
+    await evalIso(`__sesliOkuTest.showWord("#p1", 0, 6)`);
+    await WAIT(400);
+
+    state = await snapshot();
+    check(
+      "inner layout uses a scroll container",
+      state.scroller && state.scroller.window === false &&
+        state.scroller.id === "reader",
+      JSON.stringify(state.scroller)
+    );
+
+    await pageCdp.send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: 360,
+      y: 150,
+      deltaX: 0,
+      deltaY: 500,
+      modifiers: 0,
+      pointerType: "mouse",
+    });
+    await WAIT(500);
+    state = await snapshot();
+    check(
+      "wheel scrolls the inner container",
+      state.scroller.scrollTop > 0,
+      `scrollTop=${state.scroller.scrollTop}`
+    );
+    check(
+      "inner wheel pauses follow",
+      state.follow === false,
+      `follow=${state.follow}`
+    );
+
+    // Put the spoken word above the inner viewport, then resume.
+    await evalIso(`__sesliOkuTest.showWord("#p2", 0, 6)`);
+    await WAIT(200);
+    const innerBefore = await snapshot();
+    await evalIso("__sesliOkuTest.resume()");
+    await WAIT(900);
+    state = await snapshot();
+    const innerLimit = Math.min(state.scroller.bottom, state.innerHeight - 196);
+    check(
+      "resume scrolls the inner container",
+      state.scroller.scrollTop < innerBefore.scroller.scrollTop,
+      `before=${innerBefore.scroller.scrollTop} after=${state.scroller.scrollTop}`
+    );
+    check(
+      "inner word is visible above the panel",
+      !!(
+        state.wordRect &&
+        state.wordRect.top >= state.scroller.top &&
+        state.wordRect.bottom <= innerLimit
+      ),
+      JSON.stringify({
+        word: state.wordRect,
+        scroller: state.scroller,
+        innerLimit,
+      })
+    );
+
+    // Auto-follow must move the container as reading advances.
+    await evalIso(`(() => {
+      const ids = ["#p6", "#p7", "#p8", "#p9"];
+      let turn = 0;
+      window.__readingTimer = setInterval(() => {
+        __sesliOkuTest.showWord(ids[turn % ids.length], 0, 6);
+        turn++;
+      }, 320);
+    })()`);
+    const containerStart = state.scroller.scrollTop;
+    await WAIT(1900);
+    await evalIso("clearInterval(window.__readingTimer)");
+    state = await snapshot();
+    check(
+      "inner container follows the reading",
+      state.scroller.scrollTop > containerStart,
+      `before=${containerStart} after=${state.scroller.scrollTop}`
+    );
+    check(
+      "inner followed word stays above the panel",
+      !!(
+        state.wordRect &&
+        state.wordRect.top >= state.scroller.top &&
+        state.wordRect.bottom <=
+          Math.min(state.scroller.bottom, state.innerHeight - 196)
+      ),
+      JSON.stringify({ word: state.wordRect, scroller: state.scroller })
     );
 
     if (process.env.SCREENSHOT_DIR) {

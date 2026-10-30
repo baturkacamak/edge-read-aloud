@@ -580,14 +580,15 @@
     const padY = 5;
 
     const wordElement = range.startContainer.parentElement;
+    const view = getReadingViewport(wordElement);
     if (wordElement && wordElement !== state.spotlightThemeElement) {
       state.spotlightThemeElement = wordElement;
       state.spotlightDark = isDarkBackground(wordElement);
       element.dataset.theme = state.spotlightDark ? "dark" : "light";
     }
 
-    const docTop = rect.top + window.scrollY;
-    const docLeft = rect.left + window.scrollX;
+    const docTop = rect.top + view.offsetTop;
+    const docLeft = rect.left + view.offsetLeft;
     const previousDocTop = state.spotlightDocTop;
     const previousDocLeft = state.spotlightDocLeft;
     const wasHidden = element.style.opacity !== "1";
@@ -604,13 +605,12 @@
 
     // If the user scrolled back to the current word and paused interacting,
     // resume following automatically.
-    const insets = getViewportInsets();
     if (
       !state.followReading &&
       state.playing &&
       performance.now() - state.lastManualScrollAt > 900 &&
-      rect.top >= insets.top &&
-      rect.bottom <= window.innerHeight - insets.bottom
+      rect.top >= view.top &&
+      rect.bottom <= view.bottom
     ) {
       state.followReading = true;
       updateUi();
@@ -622,8 +622,8 @@
     // Scroll slightly ahead of the animation and place the box at the final
     // viewport position while the page glides there. This prevents the scroll
     // handler from interrupting the arrival animation.
-    const topMargin = insets.top;
-    const bottomMargin = insets.bottom;
+    const topMargin = view.top + 12;
+    const bottomMargin = view.bottom - 16;
     let target = rect;
     if (
       !snap &&
@@ -640,10 +640,11 @@
       }
       if (delta) {
         state.autoScrollUntil = performance.now() + 2000;
-        window.scrollBy({
-          top: delta,
-          behavior: reduceMotion ? "auto" : "smooth",
-        });
+        scrollReading(
+          view.container,
+          delta,
+          reduceMotion ? "auto" : "smooth"
+        );
         target = {
           left: rect.left,
           top: rect.top - delta,
@@ -796,6 +797,74 @@
     return viewportInsets;
   }
 
+  // Some apps (Gemini, ChatGPT, mail clients) never scroll the window: the
+  // article lives inside an overflow container. Auto-follow must move that
+  // container, otherwise window.scrollBy() is a no-op and the page appears
+  // frozen while the spoken word disappears.
+  function isScrollableBox(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+    if (
+      element === document.documentElement ||
+      element === document.body ||
+      element === state.host
+    ) {
+      return false;
+    }
+    if (element.scrollHeight <= element.clientHeight + 8) return false;
+    const overflowY = getComputedStyle(element).overflowY;
+    return (
+      overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay"
+    );
+  }
+
+  function findScrollContainer(element) {
+    let node = element;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (isScrollableBox(node)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /**
+   * Visible reading area for an element, in viewport coordinates. Accounts for
+   * window insets (fixed/sticky panels) and for an inner scroll container that
+   * may end above the window bottom.
+   */
+  function getReadingViewport(element) {
+    const container = findScrollContainer(element);
+    const insets = getViewportInsets();
+    let top = 0;
+    let bottom = window.innerHeight;
+    let offsetTop = window.scrollY;
+    let offsetLeft = window.scrollX;
+    if (container) {
+      const rect = container.getBoundingClientRect();
+      top = Math.max(rect.top, 0);
+      bottom = Math.min(rect.bottom, window.innerHeight);
+      offsetTop = container.scrollTop - rect.top;
+      offsetLeft = container.scrollLeft - rect.left;
+    }
+    const safeTop = Math.max(top, insets.top);
+    const safeBottom = Math.min(bottom, window.innerHeight - insets.bottom);
+    return {
+      container,
+      top: Math.min(safeTop, safeBottom - 24),
+      bottom: Math.max(safeBottom, safeTop + 24),
+      offsetTop,
+      offsetLeft,
+    };
+  }
+
+  function scrollReading(container, delta, behavior) {
+    if (!delta) return;
+    if (container) {
+      container.scrollBy({ top: delta, behavior });
+    } else {
+      window.scrollBy({ top: delta, behavior });
+    }
+  }
+
   let spotlightFrame = null;
 
   function repositionSpotlight() {
@@ -846,34 +915,35 @@
     const range = state.spotlightRange;
     const chunkElement = state.chunks[state.index]?.el;
     let rect = null;
+    let anchorElement = null;
     if (range) {
       rect = range.getBoundingClientRect();
+      anchorElement = range.startContainer.parentElement;
     } else if (chunkElement?.isConnected) {
       rect = chunkElement.getBoundingClientRect();
+      anchorElement = chunkElement;
     }
     if (!rect) return;
 
     // Clicking "Okumaya dön" is an explicit request to return to the reading
     // position, so move the current word to a comfortable anchor even when it
     // is technically inside the viewport. This also lifts it above large
-    // in-page panels at the bottom.
-    const insets = getViewportInsets(true);
-    const anchorMin = insets.top + 12;
-    const anchorMax =
-      window.innerHeight - insets.bottom - rect.height - 12;
-    const readingAnchor = Math.max(
-      anchorMin,
-      Math.min(Math.round(window.innerHeight * 0.32), anchorMax)
-    );
+    // in-page panels at the bottom and out of inner scroll containers.
+    const view = getReadingViewport(anchorElement);
+    const anchorMin = view.top + 12;
+    const anchorMax = Math.max(anchorMin, view.bottom - rect.height - 16);
+    const preferred = Math.round(view.top + (view.bottom - view.top) * 0.32);
+    const readingAnchor = Math.min(anchorMax, Math.max(anchorMin, preferred));
     const delta = rect.top - readingAnchor;
     const reduceMotion =
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 
     if (Math.abs(delta) > 4) {
-      window.scrollBy({
-        top: delta,
-        behavior: reduceMotion ? "auto" : "smooth",
-      });
+      scrollReading(
+        view.container,
+        delta,
+        reduceMotion ? "auto" : "smooth"
+      );
     }
 
     setTimeout(
@@ -1747,6 +1817,28 @@
           spotlights: document.querySelectorAll("#sesli-oku-spotlight").length,
           hosts: document.querySelectorAll("#sesli-oku-host").length,
           current: document.querySelectorAll(".edge-ra-current").length,
+          scroller: (() => {
+            const wordElement = range?.startContainer?.parentElement || null;
+            const container = wordElement
+              ? findScrollContainer(wordElement)
+              : null;
+            if (!container) {
+              return {
+                window: true,
+                scrollTop: window.scrollY,
+                top: 0,
+                bottom: window.innerHeight,
+              };
+            }
+            const box = container.getBoundingClientRect();
+            return {
+              window: false,
+              id: container.id || container.className || container.tagName,
+              scrollTop: container.scrollTop,
+              top: box.top,
+              bottom: box.bottom,
+            };
+          })(),
           wordRect: wordRect
             ? {
                 left: wordRect.left,
