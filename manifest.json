@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sesli Oku — Edge Read Aloud",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Microsoft Edge'in Read Aloud seslerini Linux'ta kullanın. Sayfayı veya seçimi doğal seslerle sesli okuyun.",
   "minimum_chrome_version": "116",
   "icons": {

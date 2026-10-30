@@ -9,6 +9,21 @@
   if (window.__sesliOkuLoaded) return;
   window.__sesliOkuLoaded = true;
 
+  // After an extension reload the old content script is invalidated, but its
+  // player/spotlight nodes stay in the page until the tab is refreshed. Remove
+  // them so a newly injected instance cannot create a second fixed highlight.
+  for (const node of document.querySelectorAll("#sesli-oku-host")) node.remove();
+  for (const node of document.querySelectorAll("#sesli-oku-spotlight")) node.remove();
+  for (const node of document.querySelectorAll(".edge-ra-current")) {
+    node.classList.remove("edge-ra-current");
+  }
+  try {
+    CSS.highlights?.delete("edge-ra-word");
+  } catch {
+    // The Highlight API may be unavailable on very old browsers.
+  }
+
+  const TEST_MODE = new URLSearchParams(location.search).has("sesliOkuTest");
   const MAX_CHUNK_CHARS = 900;
   const CANDIDATE_SELECTOR =
     "p, li, blockquote, h1, h2, h3, h4, h5, h6, td, dd, figcaption, div, section";
@@ -261,7 +276,13 @@
   // ---------------------------------------------------------------- player UI
 
   function buildUi() {
-    if (state.host) return state.ui;
+    if (state.host?.isConnected) {
+      for (const host of document.querySelectorAll("#sesli-oku-host")) {
+        if (host !== state.host) host.remove();
+      }
+      return state.ui;
+    }
+    for (const host of document.querySelectorAll("#sesli-oku-host")) host.remove();
 
     const host = document.createElement("div");
     host.id = "sesli-oku-host";
@@ -502,12 +523,24 @@
   }
 
   function ensureSpotlight() {
-    if (state.spotlight?.isConnected) return state.spotlight;
-    const element = document.createElement("div");
-    element.id = "sesli-oku-spotlight";
-    document.documentElement.appendChild(element);
-    state.spotlight = element;
-    return element;
+    // Never adopt an element left by a previous/duplicate instance: it may
+    // still carry inline geometry from an older layout. Keep only the element
+    // this instance owns and create a clean one when necessary.
+    const current = state.spotlight?.isConnected ? state.spotlight : null;
+    for (const other of document.querySelectorAll("#sesli-oku-spotlight")) {
+      if (other !== current) other.remove();
+    }
+    for (const host of document.querySelectorAll("#sesli-oku-host")) {
+      if (host !== state.host) host.remove();
+    }
+    if (!current) {
+      state.spotlight = document.createElement("div");
+      state.spotlight.id = "sesli-oku-spotlight";
+      document.documentElement.appendChild(state.spotlight);
+    } else {
+      state.spotlight = current;
+    }
+    return state.spotlight;
   }
 
   function setSpotlightGeometry(element, rect, padX, padY, offsetY, scale) {
@@ -1587,6 +1620,77 @@
 
 
 
+
+  if (TEST_MODE) {
+    window.__sesliOkuTest = {
+      start: (settings = {}) => startPage(settings),
+      stop: () => stop(),
+      pause: () => {
+        state.paused = true;
+        if (state.audio) state.audio.pause();
+        updateUi();
+      },
+      resume: () => resumeFollow(),
+      setFollow: (value) => {
+        state.followReading = value;
+        updateUi();
+      },
+      showWord: (selector, start = 0, end = 6) => {
+        const element = document.querySelector(selector);
+        const node = element?.firstChild;
+        if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+        const range = document.createRange();
+        range.setStart(node, Math.min(start, node.length));
+        range.setEnd(node, Math.min(end, node.length));
+        CSS.highlights.set(WORD_HIGHLIGHT, new Highlight(range));
+        showSpotlight(range);
+        return true;
+      },
+      snapshot: () => {
+        const root = state.host?.shadowRoot;
+        const highlight = CSS.highlights?.get(WORD_HIGHLIGHT);
+        const range = highlight ? Array.from(highlight)[0] : null;
+        const wordRect = range ? range.getBoundingClientRect() : null;
+        const spotRect = state.spotlight?.getBoundingClientRect() || null;
+        return {
+          playing: state.playing,
+          paused: state.paused,
+          follow: state.followReading,
+          followVisible: !!root?.querySelector(".follow.visible"),
+          scrollY: window.scrollY,
+          index: state.index,
+          total: state.chunks.length,
+          spotlights: document.querySelectorAll("#sesli-oku-spotlight").length,
+          hosts: document.querySelectorAll("#sesli-oku-host").length,
+          current: document.querySelectorAll(".edge-ra-current").length,
+          wordRect: wordRect
+            ? {
+                left: wordRect.left,
+                top: wordRect.top,
+                width: wordRect.width,
+                height: wordRect.height,
+              }
+            : null,
+          spotlightRect: spotRect
+            ? {
+                left: spotRect.left,
+                top: spotRect.top,
+                width: spotRect.width,
+                height: spotRect.height,
+              }
+            : null,
+          spotlightStyle: state.spotlight
+            ? {
+                translate: state.spotlight.style.translate,
+                scale: state.spotlight.style.scale,
+                opacity: state.spotlight.style.opacity,
+                transition: state.spotlight.style.transition,
+              }
+            : null,
+        };
+      },
+    };
+  }
 
   // ---------------------------------------------------------------- messages
 

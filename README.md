@@ -9,7 +9,7 @@
 Edge'in doğal neural sesleriyle sayfaları, seçimleri ve imlecin olduğu yeri okuyan
 Manifest V3 eklentisi. API anahtarı yok, hesap yok, kurulum derdi yok.
 
-[![Version](https://img.shields.io/badge/version-0.6.3-84cc16?style=flat-square)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.6.4-84cc16?style=flat-square)](manifest.json)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0f172a?style=flat-square)](manifest.json)
 [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-116%2B-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)](https://www.microsoft.com/edge)
@@ -249,6 +249,28 @@ print(generate_sec_ms_gec_v2(1761830000))
 PY
 ```
 
+### Testler
+
+Çalışma zamanı için bağımlılık yoktur; testler Edge'i CDP üzerinden sürer ve
+tek geliştirme bağımlılığı olarak `ws` kullanır.
+
+```bash
+npm install
+npm test
+```
+
+Testler şunları doğrular:
+
+- Eski bir eklenti sürümünden kalan oynatıcı/highlight katmanlarının temizlenmesi
+- Aynı anda ikinci bir `#sesli-oku-spotlight` oluşmaması
+- Vurgunun kelime dikdörtgeniyle hizalanması (7 px yatay / 5 px dikey padding)
+- Gerçek fare tekerleği kaydırmasının otomatik takibi durdurması
+- Takip dururken yeni kelimenin sayfayı geri çekmemesi
+- **Okumaya dön** düğmesinin takibi yeniden başlatması
+
+Test sayfası `?sesliOkuTest=1` ile açılır; test hook'u yalnızca bu modda
+etkindir.
+
 ### Proje yapısı
 
 ```text
@@ -263,11 +285,15 @@ edge-read-aloud/
 │   ├── popup.css
 │   ├── popup.js
 │   └── tts.js
+├── tests/
+│   ├── fixture.html
+│   └── run.mjs
 ├── icons/
 ├── store/
 │   ├── demo/index.html
 │   └── screenshots/
 ├── scripts/package.py
+├── package.json
 ├── PRIVACY.md
 ├── STORE.md
 ├── NOTICE
