@@ -362,6 +362,107 @@ async function main() {
       `visible=${state.followVisible}`
     );
 
+    // The common real-world case: reading continues while the user has
+    // scrolled far away, then taps "Okumaya dön". The page must travel back to
+    // the word that is being spoken, not stay where the user left it.
+    await evalIso("__sesliOkuTest.setFollow(true)");
+    await pageCdp.send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: 360,
+      y: 420,
+      deltaX: 0,
+      deltaY: 4000,
+      modifiers: 0,
+      pointerType: "mouse",
+    });
+    await WAIT(600);
+    state = await snapshot();
+    check(
+      "wheel scrolled far from the reading position",
+      state.follow === false && state.scrollY > 400,
+      `follow=${state.follow} scrollY=${state.scrollY}`
+    );
+
+    // The spoken word is far above the viewport when the user taps resume.
+    await evalIso(`__sesliOkuTest.showWord("#p3", 0, 6)`);
+    await WAIT(200);
+    const beforeResume = await snapshot();
+    await evalIso("__sesliOkuTest.resume()");
+    await WAIT(800);
+    state = await snapshot();
+    const panelTop = state.innerHeight - 196;
+    const anchor = Math.max(108, Math.round(state.innerHeight * 0.32));
+    check(
+      "resume re-centers the spoken word",
+      !!(
+        state.wordRect &&
+        approx(state.wordRect.top, anchor, 32) &&
+        state.wordRect.bottom <= panelTop
+      ),
+      JSON.stringify({
+        before: beforeResume.scrollY,
+        after: state.scrollY,
+        anchor,
+        panelTop,
+        word: state.wordRect,
+      })
+    );
+
+    // Reading keeps advancing while the user is away.
+    await evalIso(`(() => {
+      const ids = ["#p4", "#p5", "#p6", "#p7", "#p8", "#p9"];
+      let turn = 0;
+      window.__readingTimer = setInterval(() => {
+        __sesliOkuTest.showWord(ids[turn % ids.length], 0, 6);
+        turn++;
+      }, 320);
+      __sesliOkuTest.showWord(ids[0], 0, 6);
+    })()`);
+    await WAIT(1900);
+    await evalIso("clearInterval(window.__readingTimer)");
+    state = await snapshot();
+
+    // The fixture has a fixed 180px bottom panel (like Gemini's composer).
+    // The spoken word must stay above it, not merely above window.innerHeight.
+    const safeBottom = state.innerHeight - 196;
+    const wordInView =
+      state.wordRect &&
+      state.wordRect.top >= 0 &&
+      state.wordRect.bottom <= safeBottom;
+    check(
+      "resume scrolls back to the spoken word",
+      !!wordInView,
+      JSON.stringify({
+        before: beforeResume.scrollY,
+        after: state.scrollY,
+        safeBottom,
+        innerHeight: state.innerHeight,
+        word: state.wordRect,
+      })
+    );
+    check(
+      "resume keeps the glow on the spoken word",
+      !!(
+        wordInView &&
+        state.spotlightRect &&
+        approx(state.spotlightRect.left, state.wordRect.left - 7, 3) &&
+        approx(state.spotlightRect.top, state.wordRect.top - 5, 3)
+      ),
+      JSON.stringify({ word: state.wordRect, spotlight: state.spotlightRect })
+    );
+
+    if (process.env.SCREENSHOT_DIR) {
+      const shot = await pageCdp.send("Page.captureScreenshot", {
+        format: "png",
+      });
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+      writeFileSync(
+        path.join(process.env.SCREENSHOT_DIR, "resumed.png"),
+        Buffer.from(shot.data, "base64")
+      );
+    }
+
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failures.length) {
       console.log("\nFailures:");

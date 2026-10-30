@@ -13,6 +13,20 @@
         color: #1b1f1c;
       }
       p { margin: 0 0 28px; }
+      /* Simulates the fixed composer panel many chat/reader sites keep at the
+         bottom of the viewport (Gemini, ChatGPT, YouTube comments, ...). */
+      #bottom-panel {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        width: min(680px, 90vw);
+        height: 180px;
+        border-radius: 18px;
+        background: #20231f;
+        border: 1px solid #3a3f38;
+        z-index: 50;
+      }
     </style>
   </head>
   <body class="ast-no-sidebar">
@@ -27,5 +41,6 @@
     <p id="p8">Sekizinci paragraf. Yeni satır ve yeni paragraf ayrı animasyonlarla gelmelidir.</p>
     <p id="p9">Dokuzuncu paragraf. Test sonunda takip yeniden açıldığında buraya kaydırılmalıdır.</p>
     <p id="p10">Onuncu paragraf. Son paragraf.</p>
+    <div id="bottom-panel"></div>
   </body>
 </html>

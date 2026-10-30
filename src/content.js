@@ -604,12 +604,13 @@
 
     // If the user scrolled back to the current word and paused interacting,
     // resume following automatically.
+    const insets = getViewportInsets();
     if (
       !state.followReading &&
       state.playing &&
       performance.now() - state.lastManualScrollAt > 900 &&
-      rect.top >= 0 &&
-      rect.bottom <= window.innerHeight
+      rect.top >= insets.top &&
+      rect.bottom <= window.innerHeight - insets.bottom
     ) {
       state.followReading = true;
       updateUi();
@@ -621,8 +622,8 @@
     // Scroll slightly ahead of the animation and place the box at the final
     // viewport position while the page glides there. This prevents the scroll
     // handler from interrupting the arrival animation.
-    const topMargin = 96;
-    const bottomMargin = 120;
+    const topMargin = insets.top;
+    const bottomMargin = insets.bottom;
     let target = rect;
     if (
       !snap &&
@@ -724,6 +725,77 @@
     if (state.spotlight) state.spotlight.style.opacity = "0";
   }
 
+  // Fixed/sticky panels at the bottom of the viewport (chat composers, cookie
+  // bars, video controls) hide the page even though window.innerHeight still
+  // reports them as visible. Detect their edge and keep the spoken word above
+  // them, otherwise auto-follow believes the word is visible while it is
+  // actually covered.
+  let viewportInsets = { at: 0, top: 96, bottom: 120 };
+
+  function fixedOverlayAt(x, y) {
+    const stack = document.elementsFromPoint?.(x, y) || [];
+    for (const element of stack) {
+      if (!element || element === state.host) continue;
+      if (element.id === "sesli-oku-spotlight") continue;
+      if (state.host && element.getRootNode?.() === state.host.shadowRoot) {
+        continue;
+      }
+      for (
+        let node = element;
+        node && node !== document.documentElement;
+        node = node.parentElement
+      ) {
+        const style = getComputedStyle(node);
+        if (style.position !== "fixed" && style.position !== "sticky") continue;
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width < window.innerWidth * 0.3) continue;
+        if (rect.height < 24 || rect.height > window.innerHeight * 0.62) {
+          continue;
+        }
+        return rect;
+      }
+    }
+    return null;
+  }
+
+  function getViewportInsets(force = false) {
+    const now = performance.now();
+    if (!force && now - viewportInsets.at < 700) return viewportInsets;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let top = 96;
+    let bottom = 120;
+
+    for (const x of [vw * 0.5, vw * 0.2, vw * 0.8]) {
+      for (const y of [vh - 1, vh - 40, vh - 120]) {
+        const rect = fixedOverlayAt(x, y);
+        if (!rect) continue;
+        if (rect.top > vh * 0.35 && rect.bottom > vh - 60) {
+          bottom = Math.max(bottom, vh - rect.top + 8);
+        }
+      }
+    }
+
+    for (const x of [vw * 0.5, vw * 0.2, vw * 0.8]) {
+      for (const y of [1, 40, 100]) {
+        const rect = fixedOverlayAt(x, y);
+        if (!rect) continue;
+        if (rect.top < 40 && rect.bottom < vh * 0.55) {
+          top = Math.max(top, rect.bottom + 8);
+        }
+      }
+    }
+
+    viewportInsets = {
+      at: now,
+      top: Math.min(top, Math.round(vh * 0.45)),
+      bottom: Math.min(bottom, Math.round(vh * 0.55)),
+    };
+    return viewportInsets;
+  }
+
   let spotlightFrame = null;
 
   function repositionSpotlight() {
@@ -772,36 +844,47 @@
     updateUi();
 
     const range = state.spotlightRange;
-    if (!range) return;
-
-    const rect = range.getBoundingClientRect();
-    const topMargin = 96;
-    const bottomMargin = 120;
-    let delta = 0;
-    if (rect.top < topMargin) {
-      delta = rect.top - topMargin;
-    } else if (rect.bottom > window.innerHeight - bottomMargin) {
-      delta = rect.bottom - (window.innerHeight - bottomMargin);
+    const chunkElement = state.chunks[state.index]?.el;
+    let rect = null;
+    if (range) {
+      rect = range.getBoundingClientRect();
+    } else if (chunkElement?.isConnected) {
+      rect = chunkElement.getBoundingClientRect();
     }
+    if (!rect) return;
 
+    // Clicking "Okumaya dön" is an explicit request to return to the reading
+    // position, so move the current word to a comfortable anchor even when it
+    // is technically inside the viewport. This also lifts it above large
+    // in-page panels at the bottom.
+    const insets = getViewportInsets(true);
+    const anchorMin = insets.top + 12;
+    const anchorMax =
+      window.innerHeight - insets.bottom - rect.height - 12;
+    const readingAnchor = Math.max(
+      anchorMin,
+      Math.min(Math.round(window.innerHeight * 0.32), anchorMax)
+    );
+    const delta = rect.top - readingAnchor;
     const reduceMotion =
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-    if (delta) {
+
+    if (Math.abs(delta) > 4) {
       window.scrollBy({
         top: delta,
         behavior: reduceMotion ? "auto" : "smooth",
       });
-      setTimeout(
-        () => {
-          if (state.spotlightRange === range) {
-            showSpotlight(range, true, false);
-          }
-        },
-        reduceMotion ? 0 : 350
-      );
-    } else {
-      showSpotlight(range, true, false);
     }
+
+    setTimeout(
+      () => {
+        if (state.spotlightRange) {
+          // Use the current word: it may have advanced while the page scrolled.
+          showSpotlight(state.spotlightRange, true, false);
+        }
+      },
+      reduceMotion ? 0 : 450
+    );
   }
 
   function clearWordHighlight() {
@@ -1657,6 +1740,8 @@
           follow: state.followReading,
           followVisible: !!root?.querySelector(".follow.visible"),
           scrollY: window.scrollY,
+          innerHeight: window.innerHeight,
+          innerWidth: window.innerWidth,
           index: state.index,
           total: state.chunks.length,
           spotlights: document.querySelectorAll("#sesli-oku-spotlight").length,
@@ -1666,6 +1751,8 @@
             ? {
                 left: wordRect.left,
                 top: wordRect.top,
+                right: wordRect.right,
+                bottom: wordRect.bottom,
                 width: wordRect.width,
                 height: wordRect.height,
               }
@@ -1674,6 +1761,8 @@
             ? {
                 left: spotRect.left,
                 top: spotRect.top,
+                right: spotRect.right,
+                bottom: spotRect.bottom,
                 width: spotRect.width,
                 height: spotRect.height,
               }
