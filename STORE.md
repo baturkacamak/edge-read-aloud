@@ -12,7 +12,7 @@ metinleri ve kontrol listesini içerir.
 | Alan | Değer |
 | --- | --- |
 | Ad | Sesli Oku — Edge Read Aloud |
-| Sürüm | `manifest.json` içindeki sürüm (şu an 0.6.4) |
+| Sürüm | `manifest.json` içindeki sürüm (şu an 0.6.5) |
 | Kategori | Accessibility (Erişilebilirlik) |
 | Dil | Türkçe (varsayılan), İngilizce açıklama eklenebilir |
 | Lisans | GPL-3.0 |
@@ -99,7 +99,7 @@ kullanılarak 1280×800 olarak hazırlanmıştır.
 
 ## Yayın kontrol listesi
 
-- [ ] `manifest.json` sürümünü artır (`0.6.4`).
+- [ ] `manifest.json` sürümünü artır (`0.6.5`).
 - [ ] `python3 scripts/package.py` ile ZIP üret.
 - [ ] ZIP'i Edge Add-ons geliştirici paneline yükle.
 - [ ] `PRIVACY.md` içeriğini herkese açık bir URL'de yayınla (GitHub Pages,

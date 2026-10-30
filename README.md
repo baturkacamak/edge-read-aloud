@@ -9,7 +9,7 @@
 Edge'in doğal neural sesleriyle sayfaları, seçimleri ve imlecin olduğu yeri okuyan
 Manifest V3 eklentisi. API anahtarı yok, hesap yok, kurulum derdi yok.
 
-[![Version](https://img.shields.io/badge/version-0.6.4-84cc16?style=flat-square)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.6.5-84cc16?style=flat-square)](manifest.json)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0f172a?style=flat-square)](manifest.json)
 [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-116%2B-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)](https://www.microsoft.com/edge)
@@ -266,6 +266,7 @@ Testler şunları doğrular:
 - Vurgunun kelime dikdörtgeniyle hizalanması (7 px yatay / 5 px dikey padding)
 - Gerçek fare tekerleği kaydırmasının otomatik takibi durdurması
 - Takip dururken yeni kelimenin sayfayı geri çekmemesi
+- Takip dururken vurgunun kelimeye yapışık kalması (animasyonsuz)
 - **Okumaya dön** düğmesinin takibi yeniden başlatması
 
 Test sayfası `?sesliOkuTest=1` ile açılır; test hook'u yalnızca bu modda

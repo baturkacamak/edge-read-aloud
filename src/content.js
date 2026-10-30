@@ -659,14 +659,13 @@
       state.spotlightTimer = null;
     }
 
-    if (reduceMotion || snap) {
-      // Scrolling and reduced-motion mode must not animate the box.
+    if (reduceMotion || snap || !state.followReading) {
+      // Manual scrolling pauses follow. While paused, the glow must stay
+      // glued to the current word instead of animating from the previous one.
+      // Keep transitions disabled until a word arrives while following again.
       element.style.transition = "none";
       setSpotlightGeometry(element, target, padX, padY, 0, 1);
       element.style.opacity = "1";
-      requestAnimationFrame(() => {
-        if (state.spotlight === element) element.style.transition = "";
-      });
     } else if (paragraphChange || lineChange) {
       // New line/paragraph: do not glide diagonally backwards over the text.
       // Fade the box in at the new word with a tiny vertical settle and scale.
@@ -1685,6 +1684,9 @@
                 scale: state.spotlight.style.scale,
                 opacity: state.spotlight.style.opacity,
                 transition: state.spotlight.style.transition,
+                position: getComputedStyle(state.spotlight).position,
+                cssTop: getComputedStyle(state.spotlight).top,
+                cssLeft: getComputedStyle(state.spotlight).left,
               }
             : null,
         };

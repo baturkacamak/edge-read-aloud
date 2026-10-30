@@ -328,7 +328,7 @@ async function main() {
 
     const scrollAfterWheel = state.scrollY;
     await evalIso(`__sesliOkuTest.showWord("#p7", 0, 6)`);
-    await WAIT(120);
+    await WAIT(40);
     state = await snapshot();
     check(
       "paused follow does not yank scroll",
@@ -339,6 +339,16 @@ async function main() {
       "new word does not create a second glow",
       state.spotlights === 1,
       `spotlights=${state.spotlights}`
+    );
+    const pausedAligned =
+      state.wordRect &&
+      state.spotlightRect &&
+      approx(state.spotlightRect.left, state.wordRect.left - 7, 3) &&
+      approx(state.spotlightRect.top, state.wordRect.top - 5, 3);
+    check(
+      "paused scroll keeps glow on the current word",
+      !!pausedAligned,
+      JSON.stringify({ word: state.wordRect, spotlight: state.spotlightRect, style: state.spotlightStyle })
     );
 
     // Resume must restore following and hide the resume control.
