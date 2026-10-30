@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sesli Oku</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22">
+          <path
+            d="M4 9.5v5h3.2L12 18V6L7.2 9.5H4z"
+            fill="currentColor"
+          />
+          <path
+            d="M15 8.4a5 5 0 0 1 0 7.2M17.6 5.8a8.6 8.6 0 0 1 0 12.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+        </svg>
+      </div>
+      <div>
+        <h1>Sesli Oku</h1>
+        <p>Edge Read Aloud, Linux'ta</p>
+      </div>
+    </header>
+
+    <div class="actions">
+      <button id="read-page" class="primary">Sayfayı oku</button>
+      <button id="read-selection" class="secondary">Seçimi oku</button>
+      <button id="read-here" class="secondary full">İmleçten oku</button>
+    </div>
+
+    <label class="check">
+      <input id="continue-selection" type="checkbox" checked />
+      <span>Seçimden sonra devam et</span>
+    </label>
+
+    <div class="field">
+      <label for="voice">Ses</label>
+      <select id="voice"></select>
+    </div>
+
+    <div class="field">
+      <div class="label-row">
+        <label for="rate">Okuma hızı</label>
+        <output id="rate-value">0%</output>
+      </div>
+      <input id="rate" type="range" min="-50" max="100" step="5" value="0" />
+    </div>
+
+    <div class="field">
+      <div class="label-row">
+        <label for="volume">Ses düzeyi</label>
+        <output id="volume-value">0%</output>
+      </div>
+      <input id="volume" type="range" min="-50" max="50" step="5" value="0" />
+    </div>
+
+    <div class="status" id="status" role="status"></div>
+
+    <footer>
+      <span title="R: sayfa, S: seçim, H: imleç"
+        >Kısayollar: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R/S/H</kbd></span
+      >
+      <button id="stop" class="link">Durdur</button>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sesli Oku — demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1b1f1c;
+        --muted: #5f675f;
+        --accent: #46621f;
+        --paper: #fbfaf4;
+        --rule: #e4e2d6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 19px/1.75 Georgia, "Times New Roman", serif;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 64px 28px 160px;
+      }
+      .kicker {
+        font: 600 12px/1.2 system-ui, sans-serif;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 14px;
+      }
+      h1 {
+        font-size: 44px;
+        line-height: 1.12;
+        letter-spacing: -.02em;
+        margin: 0 0 18px;
+      }
+      .dek {
+        font-size: 21px;
+        line-height: 1.5;
+        color: var(--muted);
+        margin: 0 0 28px;
+      }
+      .byline {
+        font: 13px/1.4 system-ui, sans-serif;
+        color: var(--muted);
+        padding-bottom: 22px;
+        border-bottom: 1px solid var(--rule);
+        margin-bottom: 30px;
+      }
+      p { margin: 0 0 22px; }
+      strong { color: #2c3d14; }
+      a { color: var(--accent); }
+      .pull {
+        border-left: 3px solid #c7e35a;
+        padding: 6px 0 6px 18px;
+        margin: 30px 0;
+        font-size: 22px;
+        line-height: 1.45;
+        color: #33402a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="kicker">Teknoloji · Linux</div>
+      <h1>Linux'ta Edge'in sesli okuma özelliğini geri getirmek</h1>
+      <p class="dek">
+        Microsoft Edge'in Read Aloud özelliği Linux sürümünde yok. Peki doğal
+        neural seslerle sayfa okumak için tarayıcı değiştirmek şart mı?
+      </p>
+      <div class="byline">Sesli Oku · 5 dakikalık okuma · 30 Ekim 2026</div>
+
+      <p>
+        Uzun bir makaleyi ekrandan takip etmek yorucu olabilir. Sesli okuma,
+        metni gözlerinizle değil kulaklarınızla takip etmenizi sağlar; özellikle
+        yoğun çalışırken veya görme güçlüğü çektiğinizde büyük fark yaratır.
+        Microsoft Edge bu özelliği Windows ve macOS'ta sunuyor, ancak Linux
+        kullanıcıları aynı kolaylıktan yararlanamıyor.
+      </p>
+
+      <p>
+        Sesli Oku, Edge'in kendi Read Aloud servisine bağlanarak bu boşluğu
+        dolduruyor. Sayfayı <strong>paragraf paragraf</strong> okuyor, okunan
+        cümleyi sayfada vurguluyor ve alt kısımdaki küçük oynatıcıdan hızı
+        değiştirmenize izin veriyor. Türkçe için Emel ve Ahmet sesleri hazır.
+      </p>
+
+      <div class="pull">
+        Okunan kelimeyi sayfada görmek, dinlerken gözle takip etmeyi ve
+        odaklanmayı kolaylaştırıyor.
+      </div>
+
+      <p>
+        Oynatıcı; önceki paragraf, oynat/duraklat, sonraki paragraf ve hız
+        düğmelerini içeriyor. <em>Klavye kısayolları</em> ile sayfayı açmadan da
+        okumayı başlatabilirsiniz: <strong>Alt+Shift+R</strong> sayfayı,
+        <strong>Alt+Shift+S</strong> seçimi okur. Tüm ayarlar yerel olarak
+        saklanır; geliştirici hiçbir kişisel veri toplamaz.
+      </p>
+
+      <p>
+        Metin yalnızca seslendirme sırasında Microsoft'un konuşma servisine
+        gönderilir. İnternet bağlantısı gerekir. PDF görüntüleyici ve tarayıcı
+        içi sayfalar şimdilik desteklenmiyor; bunlar için ayrı bir görüntüleyici
+        katmanı gerekiyor.
+      </p>
+
+      <p>
+        Sonuç olarak Linux'ta Edge kullanmaya devam ederken doğal seslerle
+        okumak mümkün. Eklentiyi yükledikten sonra herhangi bir makaleyi açıp
+        araç çubuğundaki simgeden <strong>Sayfayı oku</strong> demeniz yeterli.
+      </p>
+    </main>
+  </body>
+</html>

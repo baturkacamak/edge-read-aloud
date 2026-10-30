@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "Sesli Oku — Edge Read Aloud",
+  "version": "0.6.2",
+  "description": "Microsoft Edge'in Read Aloud seslerini Linux'ta kullanın. Sayfayı veya seçimi doğal seslerle sesli okuyun.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Sesli Oku",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "contextMenus",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://speech.platform.bing.com/*",
+    "wss://speech.platform.bing.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "css": [
+        "src/content.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "commands": {
+    "read-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "Sayfayı sesli oku"
+    },
+    "read-selection": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Seçimi sesli oku"
+    },
+    "read-here": {
+      "suggested_key": {
+        "default": "Alt+Shift+H"
+      },
+      "description": "İmleçten sesli oku"
+    },
+    "toggle": {
+      "suggested_key": {
+        "default": "Alt+Shift+Space"
+      },
+      "description": "Oynat / duraklat"
+    },
+    "stop": {
+      "description": "Sesli okumayı durdur"
+    }
+  }
+}

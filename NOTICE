@@ -1,0 +1,34 @@
+Sesli Oku — Edge Read Aloud for Linux
+Copyright (C) 2026 Batur Kacamak
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+--------------------------------------------------------------------------
+
+Third-party attribution
+-----------------------
+
+The Sec-MS-GEC v2 token algorithm in src/drm.js is a JavaScript port of
+`generate_sec_ms_gec_v2`, `_cs64_digest` and the related helpers from:
+
+    rany2/edge-tts — https://github.com/rany2/edge-tts
+    src/edge_tts/drm.py
+    License: GPL-3.0
+
+The algorithm itself was derived by the edge-tts contributors from Microsoft
+Edge's native Read Aloud implementation. The WebSocket protocol and SSML
+handling in src/tts.js follow the same public implementation.
+
+This project is not affiliated with, endorsed by, or sponsored by Microsoft
+Corporation. "Microsoft", "Edge" and "Read Aloud" are trademarks of Microsoft
+Corporation.
