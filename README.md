@@ -9,7 +9,7 @@
 Edge'in doğal neural sesleriyle sayfaları, seçimleri ve imlecin olduğu yeri okuyan
 Manifest V3 eklentisi. API anahtarı yok, hesap yok, kurulum derdi yok.
 
-[![Version](https://img.shields.io/badge/version-0.6.2-84cc16?style=flat-square)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.6.3-84cc16?style=flat-square)](manifest.json)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0f172a?style=flat-square)](manifest.json)
 [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-116%2B-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)](https://www.microsoft.com/edge)
@@ -50,6 +50,7 @@ Edge'in kendi Read Aloud servisini doğrudan kullanarak bu boşluğu dolduruyor:
 | **Sesler** | 300'den fazla Microsoft neural sesi; Türkçe Emel ve Ahmet hazır |
 | **Okuma** | Sayfanın tamamı, seçili metin veya imlecin bulunduğu cümle |
 | **Vurgu** | Paragraf + kelime vurgusu; yumuşak geçişli, tema duyarlı ışık halkası |
+| **Takip** | Metin görünümden çıkınca otomatik kaydırma; elle kaydırınca duraklar, **Okumaya dön** ile devam eder |
 | **Akış** | Paragraf buffer'ı + bir sonraki paragrafı önceden hazırlama; dev MP3 yok |
 | **Oynatıcı** | Canlı hız (0.75×–2×), duraklat, önceki/sonraki paragraf, durdur |
 | **Erişim** | Klavye kısayolları, sağ tık menüsü ve popup |
@@ -129,6 +130,13 @@ geçer. "Seçimi oku" bir metin seçili değilse otomatik olarak bu davranışa 
 "Seçimi oku" varsayılan olarak seçimin bittiği yerden sayfanın devamını okur.
 Yalnızca seçimi okumak istiyorsanız popup'taki **Seçimden sonra devam et**
 kutusunu kapatın.
+
+### Elle kaydırma ve takip
+
+Okuma sürerken sayfayı elle kaydırırsanız otomatik takip duraklar; oynatıcıda
+**Okumaya dön** düğmesi görünür. Bu düğme sizi okunan kelimeye geri getirir.
+Elle müdahale etmediğiniz sürece metin görünümden çıktıkça otomatik kaydırma
+devam eder.
 
 > Tarayıcılar en fazla **4 varsayılan kısayola** izin verir. Bu yüzden
 > **Durdur**'un varsayılan tuşu yok; `edge://extensions/shortcuts` üzerinden

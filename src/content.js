@@ -50,6 +50,11 @@
     spotlightThemeElement: null,
     spotlightDark: false,
     spotlightTimer: null,
+    spotlightDocTop: null,
+    spotlightDocLeft: null,
+    followReading: true,
+    autoScrollUntil: 0,
+    lastManualScrollAt: 0,
     hideTimer: null,
   };
 
@@ -319,6 +324,20 @@
           font-size: 12px;
         }
         button.close { font-size: 16px; color: #b9bdb6; }
+        button.follow {
+          display: none;
+          width: auto;
+          height: 26px;
+          padding: 0 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(217,242,122,.35);
+          background: rgba(217,242,122,.10);
+          color: #d9f27a;
+          font-size: 11px;
+          white-space: nowrap;
+        }
+        button.follow.visible { display: grid; }
+        button.follow:hover { background: rgba(217,242,122,.18); }
         .divider {
           width: 1px;
           height: 20px;
@@ -342,6 +361,7 @@
           <button data-act="next" title="Sonraki paragraf">⏭</button>
           <span class="divider"></span>
           <span class="status">Hazır</span>
+          <button data-act="follow" class="follow" title="Okumaya dön">Okumaya dön</button>
           <span class="divider"></span>
           <button data-act="speed" class="speed" title="Oynatma hızı">1.0×</button>
           <button data-act="close" class="close" title="Durdur ve kapat">✕</button>
@@ -352,6 +372,7 @@
       status: shadow.querySelector(".status"),
       toggle: shadow.querySelector("[data-act='toggle']"),
       speed: shadow.querySelector("[data-act='speed']"),
+      follow: shadow.querySelector("[data-act='follow']"),
     };
 
     shadow.addEventListener("click", (event) => {
@@ -362,6 +383,7 @@
       else if (action === "prev") skip(-1);
       else if (action === "next") skip(1);
       else if (action === "speed") cycleSpeed();
+      else if (action === "follow") resumeFollow();
       else if (action === "close") stop();
     });
 
@@ -393,6 +415,12 @@
     const ui = state.ui;
     ui.toggle.textContent = state.paused ? "▶" : state.playing ? "❚❚" : "▶";
     ui.speed.textContent = `${state.settings.playbackRate.toFixed(2).replace(/0$/, "")}×`;
+    if (ui.follow) {
+      ui.follow.classList.toggle(
+        "visible",
+        !state.followReading && state.playing
+      );
+    }
 
     if (!state.playing && state.chunks.length && state.index >= state.chunks.length) {
       ui.status.textContent = "Bitti";
@@ -525,13 +553,34 @@
       element.dataset.theme = state.spotlightDark ? "dark" : "light";
     }
 
-    const previous = state.spotlightRect;
+    const docTop = rect.top + window.scrollY;
+    const docLeft = rect.left + window.scrollX;
+    const previousDocTop = state.spotlightDocTop;
+    const previousDocLeft = state.spotlightDocLeft;
     const wasHidden = element.style.opacity !== "1";
-    const dx = previous ? rect.left - previous.left : 0;
-    const dy = previous ? rect.top - previous.top : 0;
+    const dx =
+      previousDocTop != null && previousDocLeft != null
+        ? docLeft - previousDocLeft
+        : 0;
+    const dy =
+      previousDocTop != null ? docTop - previousDocTop : 0;
     const paragraphChange =
-      !previous || wasHidden || Math.abs(dx) > 240 || Math.abs(dy) > 80;
-    const lineChange = !paragraphChange && previous && Math.abs(dy) > 6;
+      previousDocTop == null || wasHidden || Math.abs(dx) > 240 || Math.abs(dy) > 80;
+    const lineChange =
+      !paragraphChange && previousDocTop != null && Math.abs(dy) > 6;
+
+    // If the user scrolled back to the current word and paused interacting,
+    // resume following automatically.
+    if (
+      !state.followReading &&
+      state.playing &&
+      performance.now() - state.lastManualScrollAt > 900 &&
+      rect.top >= 0 &&
+      rect.bottom <= window.innerHeight
+    ) {
+      state.followReading = true;
+      updateUi();
+    }
 
     const reduceMotion =
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
@@ -542,7 +591,12 @@
     const topMargin = 96;
     const bottomMargin = 120;
     let target = rect;
-    if (!snap && autoScroll && range !== state.spotlightScrollRange) {
+    if (
+      !snap &&
+      autoScroll &&
+      state.followReading &&
+      range !== state.spotlightScrollRange
+    ) {
       state.spotlightScrollRange = range;
       let delta = 0;
       if (rect.top < topMargin) {
@@ -551,6 +605,7 @@
         delta = rect.bottom - (window.innerHeight - bottomMargin);
       }
       if (delta) {
+        state.autoScrollUntil = performance.now() + 2000;
         window.scrollBy({
           top: delta,
           behavior: reduceMotion ? "auto" : "smooth",
@@ -585,7 +640,8 @@
       const duration = paragraphChange ? 260 : 190;
       const offset = paragraphChange ? 9 : 4;
       const startScale = paragraphChange ? 0.96 : 0.985;
-      const direction = previous && rect.top < previous.top ? 1 : -1;
+      const direction =
+        previousDocTop != null && docTop < previousDocTop ? 1 : -1;
 
       element.style.transition = "none";
       setSpotlightGeometry(
@@ -609,7 +665,6 @@
       state.spotlightTimer = setTimeout(() => {
         state.spotlightTimer = null;
         if (state.spotlight === element) element.style.transition = "";
-        repositionSpotlight();
       }, duration + 40);
     } else {
       // Same line: glide horizontally and resize smoothly.
@@ -620,6 +675,8 @@
 
     state.spotlightRange = range;
     state.spotlightRect = target;
+    state.spotlightDocTop = docTop;
+    state.spotlightDocLeft = docLeft;
   }
 
   function hideSpotlight() {
@@ -630,6 +687,8 @@
     state.spotlightRange = null;
     state.spotlightRect = null;
     state.spotlightScrollRange = null;
+    state.spotlightDocTop = null;
+    state.spotlightDocLeft = null;
     if (state.spotlight) state.spotlight.style.opacity = "0";
   }
 
@@ -641,6 +700,76 @@
       spotlightFrame = null;
       if (state.spotlightRange) showSpotlight(state.spotlightRange, true, false);
     });
+  }
+
+  function markManualScroll() {
+    if (!state.playing) return;
+    state.autoScrollUntil = 0;
+    state.lastManualScrollAt = performance.now();
+    if (state.followReading) {
+      state.followReading = false;
+      updateUi();
+    }
+  }
+
+  let scrollSnapFrame = null;
+
+  function onScroll() {
+    if (!state.playing) return;
+    if (performance.now() < state.autoScrollUntil) return;
+
+    state.lastManualScrollAt = performance.now();
+    if (state.followReading) {
+      state.followReading = false;
+      updateUi();
+    }
+
+    if (scrollSnapFrame) return;
+    scrollSnapFrame = requestAnimationFrame(() => {
+      scrollSnapFrame = null;
+      if (state.spotlightRange) {
+        showSpotlight(state.spotlightRange, true, false);
+      }
+    });
+  }
+
+  function resumeFollow() {
+    state.followReading = true;
+    state.lastManualScrollAt = 0;
+    state.autoScrollUntil = performance.now() + 2000;
+    updateUi();
+
+    const range = state.spotlightRange;
+    if (!range) return;
+
+    const rect = range.getBoundingClientRect();
+    const topMargin = 96;
+    const bottomMargin = 120;
+    let delta = 0;
+    if (rect.top < topMargin) {
+      delta = rect.top - topMargin;
+    } else if (rect.bottom > window.innerHeight - bottomMargin) {
+      delta = rect.bottom - (window.innerHeight - bottomMargin);
+    }
+
+    const reduceMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    if (delta) {
+      window.scrollBy({
+        top: delta,
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+      setTimeout(
+        () => {
+          if (state.spotlightRange === range) {
+            showSpotlight(range, true, false);
+          }
+        },
+        reduceMotion ? 0 : 350
+      );
+    } else {
+      showSpotlight(range, true, false);
+    }
   }
 
   function clearWordHighlight() {
@@ -1018,6 +1147,9 @@
     state.index = index;
     state.playing = true;
     state.paused = false;
+    state.followReading = true;
+    state.autoScrollUntil = 0;
+    state.lastManualScrollAt = 0;
 
     const blocked =
       state.blockedIndex === index && state.blockedResult
@@ -1081,6 +1213,8 @@
     state.session++;
     state.playing = false;
     state.paused = false;
+    state.followReading = true;
+    state.lastManualScrollAt = 0;
     state.index = 0;
     state.chunks = [];
     state.cache.clear();
@@ -1375,8 +1509,66 @@
     true
   );
 
-  document.addEventListener("scroll", repositionSpotlight, true);
+  document.addEventListener("scroll", onScroll, true);
+  window.addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", repositionSpotlight);
+
+  const isPlayerTarget = (target) =>
+    target instanceof Element && !!target.closest("#sesli-oku-host");
+
+  document.addEventListener(
+    "wheel",
+    (event) => {
+      if (isPlayerTarget(event.target)) return;
+      markManualScroll();
+    },
+    { passive: true, capture: true }
+  );
+
+  document.addEventListener(
+    "touchmove",
+    (event) => {
+      if (isPlayerTarget(event.target)) return;
+      markManualScroll();
+    },
+    { passive: true, capture: true }
+  );
+
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(
+          "input, textarea, select, [contenteditable='true']"
+        )
+      ) {
+        return;
+      }
+      const keys = new Set([
+        "PageDown",
+        "PageUp",
+        "Home",
+        "End",
+        "ArrowDown",
+        "ArrowUp",
+        " ",
+      ]);
+      if (keys.has(event.key)) markManualScroll();
+    },
+    true
+  );
+
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      // A drag on the classic scrollbar has no wheel/touch event.
+      if (event.clientX >= document.documentElement.clientWidth - 18) {
+        markManualScroll();
+      }
+    },
+    true
+  );
 
   document.addEventListener(
     "selectionchange",
@@ -1389,6 +1581,8 @@
     },
     true
   );
+
+
 
 
 
