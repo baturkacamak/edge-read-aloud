@@ -14,7 +14,7 @@
   // them so a newly injected instance cannot create a second fixed highlight.
   for (const node of document.querySelectorAll("#sesli-oku-host")) node.remove();
   for (const node of document.querySelectorAll("#sesli-oku-spotlight")) node.remove();
-  for (const node of document.querySelectorAll("#sesli-oku-spacer, #sesli-oku-layout")) node.remove();
+  for (const node of document.querySelectorAll("#sesli-oku-spacer, #sesli-oku-layout, #sesli-oku-theme-highlight")) node.remove();
   for (const element of document.querySelectorAll("[data-sesli-oku-header]")) {
     try {
       const original = JSON.parse(element.getAttribute("data-sesli-oku-header"));
@@ -30,6 +30,33 @@
     CSS.highlights?.delete("edge-ra-word");
   } catch {
     // The Highlight API may be unavailable on very old browsers.
+  }
+
+  const themes = globalThis.SesliOkuThemes;
+  const themeHighlightStyle = document.createElement("style");
+  themeHighlightStyle.id = "sesli-oku-theme-highlight";
+
+  function applyTheme(theme) {
+    const wrap = state.host?.shadowRoot?.querySelector(".wrap");
+    if (wrap) themes.apply(wrap, theme, state.host);
+    if (state.ui?.theme) state.ui.theme.value = theme;
+    // Only the extension's highlight selectors are themed on the host page.
+    // All control CSS stays isolated inside the shadow root.
+    if (theme === "modern") {
+      themeHighlightStyle.remove();
+    } else {
+      const color = theme === "xp" ? "36, 94, 219" : theme === "win7" ? "36, 107, 156" : "0, 0, 128";
+      themeHighlightStyle.textContent = `
+        .edge-ra-current { background-color: rgba(${color}, .12) !important; box-shadow: 0 0 0 2px rgba(${color}, .3) !important; }
+        ::highlight(edge-ra-word) { background-color: rgb(${color}); color: #fff; text-shadow: none; }
+        #sesli-oku-spotlight, #sesli-oku-spotlight[data-theme="dark"] {
+          border-color: rgba(${color}, .5); background: rgba(${color}, .06);
+          border-radius: ${theme === "win95" || theme === "win98" ? "0" : "5px"};
+          box-shadow: 0 0 14px 4px rgba(${color}, .18);
+        }`;
+      if (!themeHighlightStyle.isConnected) document.documentElement.appendChild(themeHighlightStyle);
+    }
+    if (state.host?.isConnected) schedulePageLayout();
   }
 
   const TEST_MODE = new URLSearchParams(location.search).has("sesliOkuTest");
@@ -83,6 +110,8 @@
     lastManualScrollAt: 0,
     hideTimer: null,
   };
+
+  themes.subscribe(applyTheme);
 
   let lastPoint = null;
   let lastCaretRange = null;
@@ -476,6 +505,7 @@
   let layoutObserver = null;
   let pageObserver = null;
   let pageLayoutFrame = null;
+  let pageBasePadding = "0px";
   const shiftedHeaders = new Map();
 
   function restoreShiftedHeaders() {
@@ -495,6 +525,7 @@
       pageLayoutStyle?.remove();
       restoreShiftedHeaders();
       const padding = getComputedStyle(document.documentElement).paddingTop;
+      pageBasePadding = padding;
       const height = state.host.getBoundingClientRect().height;
       const rules = [`html:root { padding-top: calc(${padding} + ${height}px) !important; }`];
       for (const element of document.body?.querySelectorAll("*") || []) {
@@ -518,6 +549,7 @@
         const original = {
           value: element.style.getPropertyValue("top"),
           priority: element.style.getPropertyPriority("top"),
+          baseTop: top,
         };
         element.setAttribute("data-sesli-oku-header", JSON.stringify(original));
         shiftedHeaders.set(element, original);
@@ -527,6 +559,21 @@
       pageLayoutStyle.id = "sesli-oku-layout";
       pageLayoutStyle.textContent = rules.join("\n");
       document.documentElement.appendChild(pageLayoutStyle);
+    });
+  }
+
+  function syncToolbarHeight() {
+    if (!pageLayoutStyle?.isConnected || state.host?.style.display === "none") return;
+    const height = state.host.getBoundingClientRect().height;
+    changePlayerLayout(() => {
+      // Height may change every animation frame. Reuse measured page styles
+      // instead of rescanning the entire document throughout a theme fade.
+      pageLayoutStyle.sheet?.cssRules[0]?.style.setProperty(
+        "padding-top", `calc(${pageBasePadding} + ${height}px)`, "important"
+      );
+      for (const [element, original] of shiftedHeaders) {
+        element.style.setProperty("top", `${original.baseTop + height}px`, "important");
+      }
     });
   }
 
@@ -548,7 +595,7 @@
   }
 
   function observePageLayout() {
-    layoutObserver ||= new ResizeObserver(schedulePageLayout);
+    layoutObserver ||= new ResizeObserver(syncToolbarHeight);
     layoutObserver.observe(state.host);
     pageObserver ||= new MutationObserver((records) => {
       if (records.some(record => [...record.addedNodes, ...record.removedNodes].some(
@@ -561,6 +608,7 @@
 
   function toggleSettings(force) {
     if (!state.ui) return;
+    themes.finishTransition(state.host.shadowRoot.querySelector(".wrap"));
     const open =
       typeof force === "boolean"
         ? force
@@ -606,6 +654,8 @@
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `
       <style>
+        @layer base, themes;
+        @layer base {
         :host { all: initial; }
         .wrap {
           font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -644,6 +694,7 @@
         .brand small { display: block; color: #9ca793; font-size: 10px; }
         .transport, .actions { display: flex; align-items: center; gap: 4px; }
         .actions { margin-left: auto; }
+        .player-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
         button {
           all: unset;
           box-sizing: border-box;
@@ -716,7 +767,7 @@
           margin: 0 auto;
           padding: 16px 24px 20px;
           border-top: 1px solid rgba(255,255,255,.10);
-          grid-template-columns: 2fr 1fr 1fr;
+          grid-template-columns: 1fr 1.5fr 1fr 1fr;
           gap: 24px;
         }
         .settings.open { display: grid; }
@@ -778,6 +829,7 @@
           .wrap { animation: none; }
           button { transition: none; }
         }
+        }
       </style>
       <div class="wrap">
         <div class="bar" role="toolbar" aria-label="Sesli okuma kontrolleri">
@@ -792,11 +844,13 @@
           </div>
           <span class="divider" aria-hidden="true"></span>
           <span class="status">Hazır</span>
+          <div class="player-tools">
           <button data-act="follow" class="follow" title="Okumaya dön">Okumaya dön</button>
           <div class="actions">
           <button data-act="speed" class="speed" title="Oynatma hızı">1.0×</button>
           <button data-act="settings" class="icon" title="Okuma ayarları" aria-label="Okuma ayarları" aria-expanded="false" aria-controls="sesli-oku-settings">⚙</button>
           <button data-act="close" class="close" title="Durdur ve kapat">✕</button>
+          </div>
           </div>
         </div>
         <div id="sesli-oku-settings" class="settings" role="region" aria-label="Okuma ayarları">
@@ -821,6 +875,16 @@
         </div>
       </div>`;
 
+    const themeStyle = document.createElement("style");
+    themeStyle.textContent = themes.css;
+    shadow.appendChild(themeStyle);
+    const themeField = document.createElement("div");
+    themeField.className = "field theme-field";
+    themeField.innerHTML = '<label for="sesli-oku-theme">Görünüm · Tema</label><select id="sesli-oku-theme" aria-label="Görünüm teması"></select>';
+    shadow.querySelector(".settings").prepend(themeField);
+    themes.fillSelect(themeField.querySelector("select"));
+    shadow.querySelector(".wrap").dataset.theme = themes.current();
+
     const ui = {
       status: shadow.querySelector(".status"),
       toggle: shadow.querySelector("[data-act='toggle']"),
@@ -828,6 +892,7 @@
       follow: shadow.querySelector("[data-act='follow']"),
       settingsButton: shadow.querySelector("[data-act='settings']"),
       settings: shadow.querySelector(".settings"),
+      theme: shadow.querySelector("#sesli-oku-theme"),
       voice: shadow.querySelector("#sesli-oku-voice"),
       rate: shadow.querySelector("#sesli-oku-rate"),
       rateValue: shadow.querySelector("#sesli-oku-rate-value"),
@@ -857,7 +922,12 @@
     });
 
     shadow.addEventListener("change", (event) => {
-      if (event.target === ui.voice) {
+      if (event.target === ui.theme) {
+        themes.set(ui.theme.value).catch(error => {
+          ui.theme.value = themes.current();
+          setStatus(error.message, true);
+        });
+      } else if (event.target === ui.voice) {
         applyReadingSettings({ voice: ui.voice.value });
       } else if (event.target === ui.rate) {
         applyReadingSettings({ rate: Number(ui.rate.value) });
@@ -887,6 +957,7 @@
       if (!state.playing && state.host) {
         toggleSettings(false);
         changePlayerLayout(() => {
+          themes.finishTransition(state.host.shadowRoot.querySelector(".wrap"));
           state.host.hidePopover();
           state.host.style.display = "none";
           releasePageLayout();
@@ -2309,6 +2380,8 @@
         const wordRect = range ? range.getBoundingClientRect() : null;
         const spotRect = state.spotlight?.getBoundingClientRect() || null;
         return {
+          theme: themes.current(),
+          session: state.session,
           playing: state.playing,
           paused: state.paused,
           follow: state.followReading,

@@ -1,3 +1,22 @@
+const themes = globalThis.SesliOkuThemes;
+const themeStyle = document.createElement("style");
+themeStyle.textContent = themes.css;
+document.head.appendChild(themeStyle);
+const themeSelect = document.getElementById("theme");
+themes.fillSelect(themeSelect);
+themes.subscribe(theme => {
+  themes.apply(document.body, theme);
+  themeSelect.value = theme;
+});
+themeSelect.addEventListener("change", async () => {
+  try {
+    await themes.set(themeSelect.value);
+  } catch (error) {
+    themeSelect.value = themes.current();
+    setStatus(error.message, true);
+  }
+});
+
 const DEFAULT_SETTINGS = {
   voice: "tr-TR-EmelNeural",
   rate: 0,

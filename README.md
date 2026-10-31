@@ -132,6 +132,37 @@ ayrılan alan büyür ve içerik aşağı itilir; kapanınca alan geri verilir.
 Değişiklikler anında uygulanır ve popup ile aynı `chrome.storage.local`
 kaydına yazılır.
 
+### Görünüm temaları
+
+Popup'taki veya üst çubuğun ⚙ ayarlarındaki **Görünüm · Tema** menüsünden
+**Modern**, **Windows 95**, **Windows 98**, **Windows XP** ve **Windows 7**
+arasında geçiş yapabilirsiniz. Seçim anında tüm açık uzantı arayüzlerine
+uygulanır, yerel olarak kaydedilir ve sonraki açılışlarda korunur. Tema değişimi
+okumayı yeniden başlatmaz; duraklatma, paragraf ve takip konumu korunur.
+Tema geçişlerinde eski ve yeni görünüm 320 ms içinde yumuşakça birbirine
+geçer; çubuğun yüksekliği ve sayfada ayrılan alan birlikte hareket eder.
+Sistemde **hareketi azalt** tercihi açıksa geçişler anında uygulanır.
+
+Temalar; düğmeleri, başlıkları, alanları, kaydırıcıları ve okuma vurgusunu
+birlikte değiştirir. Modern mevcut görünümü korur. Windows 95 düz lacivert,
+Windows 98 geçişli başlıklar kullanır. XP teması; tam genişlikte Luna başlığı,
+mavi pencere çerçevesi, başlık içindeki kırmızı kapatma düğmesi ve yeşil
+oynatma/kaydırıcı kontrolleri kullanır. Windows 7 teması ise Aero benzeri cam
+çerçeve, parlayan başlık, üst kenara birleşen geniş kapatma düğmesi ve parlak
+komut düğmeleri içerir. Her ikisinde de kontroller başlığın altına yerleşir;
+popup aynı dönemin pencere ve form ölçülerini kullanır. Windows 95/98
+temalarında tam genişlikte klasik başlık,
+kompakt araç çubuğu ve 98.css projesinden alınan piksel yazı tipleri kullanılır.
+Stiller ve yazı tipleri uzantıyla birlikte gelir; uzaktan CSS veya font indirilmez.
+
+HTML class'ları ortaktır. `src/themes.js` içindeki tema katmanı, popup'ın
+`body` ve oynatıcının Shadow DOM içindeki `.wrap` kapsayıcısına verilen
+`data-theme` değerine göre görünümü uygular. Tema stilleri ziyaret edilen
+sayfanın kontrollerine yayılmaz. Temel stiller `base`, tema stilleri ise daha
+öncelikli `themes` CSS katmanındadır; modern kontrollerin seçici önceliği klasik
+tema görünümünü ezemez. Klasik tema kaynaklarının lisansı `src/vendor/98.css/LICENSE`
+dosyasındadır.
+
 ### İmleçten okuma
 
 1. Okumak istediğiniz paragrafın içine tıklayıp imleci yerleştirin.
@@ -187,6 +218,7 @@ flowchart LR
 | `src/drm.js` | `Sec-MS-GEC` v2 token üretimi (CS64 + SHA-256) |
 | `src/tts.js` | WebSocket protokolü, SSML, MP3 ve kelime sınırları |
 | `src/background.js` | Mesaj yönlendirme, ses listesi önbelleği, menüler |
+| `src/themes.js` | Ortak tema stilleri, tema seçimi, kalıcılık ve arayüzler arası eşzamanlama |
 | `src/content.js` | Metin çıkarma, parçalama, oynatma kuyruğu, vurgu, oynatıcı |
 | `src/popup.*` | Ses / hız / ses düzeyi / seçimden devam arayüzü |
 | `manifest.json` | Manifest V3 tanımı, izinler, kısayollar |
@@ -290,6 +322,8 @@ Testler şunları doğrular:
 - Oynatıcının HTML üzerinde sabit bir üst şerit olarak içeriği aşağı
   itmesi ve kaydırma sırasında ekranın tepesinde sabit kalması
 - Üst oynatıcıdaki ⚙ ayarlar panelinin açılması ve ses listesini içermesi
+- Beş görünüm temasının popup ve üst çubukta eşzamanlanması, kaydedilmesi,
+  dar ekrana sığması ve tema değişiminin okuma durumunu koruması
 - Okuma durdurulduğunda paragraf/kelime vurgusunun ve ışık halkasının
   (eski bir içerik betiğinden kalan kopyalar dahil) tamamen kaldırılması
 
@@ -308,6 +342,7 @@ edge-read-aloud/
 │   ├── drm.js
 │   ├── popup.html
 │   ├── popup.css
+│   ├── themes.js
 │   ├── popup.js
 │   └── tts.js
 ├── tests/

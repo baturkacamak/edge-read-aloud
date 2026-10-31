@@ -136,6 +136,8 @@ async function main() {
   let edge;
   let pageCdp;
   let pageTarget;
+  let popupCdp;
+  let popupTarget;
 
   try {
     edge = spawn(
@@ -753,6 +755,204 @@ async function main() {
     await pageCdp.send("Emulation.clearDeviceMetricsOverride");
     await WAIT(150);
 
+    // ------------------------------------------------------ appearance themes
+    console.log("\n  Appearance themes");
+    const extensionId = await evalIso("chrome.runtime.id");
+    await evalIso(`chrome.storage.local.set({ voicesCache: { at: Date.now(), voices: [{ ShortName: "tr-TR-EmelNeural", Locale: "tr-TR", Gender: "Female" }] } })`, true);
+    popupTarget = await json(
+      `http://127.0.0.1:${port}/json/new?${encodeURIComponent(`chrome-extension://${extensionId}/src/popup.html`)}`,
+      { method: "PUT" }
+    );
+    popupCdp = await connectCDP(popupTarget.webSocketDebuggerUrl);
+    await popupCdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 360, height: 700, deviceScaleFactor: 1, mobile: false,
+    });
+    await pageCdp.send("Page.bringToFront");
+    const evalPopup = async expression => {
+      const result = await popupCdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+      return result.result.value;
+    };
+    await waitFor("popup theme controls", () => evalPopup(`document.querySelector("#theme")?.options.length === 5`));
+    check("popup and toolbar offer all five themes", await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-theme").options.length === 5`));
+    const beforeTheme = await snapshot();
+    const sitePanelColor = await evalIso(`getComputedStyle(document.querySelector("#bottom-panel")).backgroundColor`);
+    for (const theme of ["win95", "win98", "xp", "win7", "modern"]) {
+      await evalIso(`(() => {
+        const select = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-theme");
+        select.value = ${JSON.stringify(theme)};
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+      await waitFor(`${theme} applies to toolbar`, () => evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".wrap").dataset.theme === ${JSON.stringify(theme)}`));
+      await waitFor(`${theme} syncs to popup`, () => evalPopup(`document.body.dataset.theme === ${JSON.stringify(theme)} && document.querySelector("#theme").value === ${JSON.stringify(theme)}`));
+      await WAIT(100);
+      const themed = await snapshot();
+      check(`${theme} preserves the reading session and pause state`, themed.session === beforeTheme.session && themed.paused === beforeTheme.paused && themed.index === beforeTheme.index && themed.follow === beforeTheme.follow);
+      check(`${theme} keeps the toolbar fixed and page below it`, approx(themed.hostRect.top, 0) && await evalIso(`document.querySelector("#reader").getBoundingClientRect().top >= document.querySelector("#sesli-oku-host").getBoundingClientRect().bottom - 1`));
+      check(`${theme} leaves site controls unthemed`, sitePanelColor === await evalIso(`getComputedStyle(document.querySelector("#bottom-panel")).backgroundColor`));
+      if (theme !== "modern") {
+        const expected = { win95: "rgb(192, 192, 192)", win98: "rgb(192, 192, 192)", xp: "rgb(236, 233, 216)", win7: "rgb(234, 241, 248)" }[theme];
+        check(`${theme} applies its palette to both surfaces`,
+          await evalIso(`getComputedStyle(document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".wrap")).getPropertyValue("--bg").trim() === ${JSON.stringify({ win95: "#c0c0c0", win98: "#c0c0c0", xp: "#ece9d8", win7: "#eaf1f8" }[theme])}`) &&
+          await evalPopup(`getComputedStyle(document.body).backgroundColor === ${JSON.stringify(expected)}`));
+      }
+      if (theme !== "modern") {
+        check(`${theme} centers player controls and keeps status compact`, await evalIso(`(() => {
+          const root = document.querySelector("#sesli-oku-host").shadowRoot;
+          const bar = root.querySelector(".bar").getBoundingClientRect();
+          const transport = root.querySelector(".transport").getBoundingClientRect();
+          const status = root.querySelector(".status").getBoundingClientRect();
+          return Math.abs((transport.left + transport.right) / 2 - (bar.left + bar.right) / 2) < 2 &&
+            status.width <= 161 && status.right <= transport.left;
+        })()`));
+      }
+      if (theme === "win95" || theme === "win98") {
+        await waitFor("classic pixel fonts", () => evalIso(`Array.from(document.fonts).filter(face => face.family === "Sesli Oku Classic" && face.status === "loaded").length === 2`));
+        await waitFor("popup classic pixel fonts", () => evalPopup(`Array.from(document.fonts).filter(face => face.family === "Sesli Oku Classic" && face.status === "loaded").length === 2`));
+        check(`${theme} uses the bundled classic font on both surfaces`, true);
+        check(`${theme} uses a full title strip with compact controls`, await evalIso(`(() => {
+          const root = document.querySelector("#sesli-oku-host").shadowRoot;
+          const bar = root.querySelector(".bar").getBoundingClientRect();
+          const title = root.querySelector(".brand").getBoundingClientRect();
+          const close = root.querySelector("button.close").getBoundingClientRect();
+          const button = getComputedStyle(root.querySelector("button.primary"));
+          return Math.abs(bar.width - title.width) < 2 && close.top >= title.top && close.bottom <= title.bottom &&
+            button.height === "28px" && button.borderRadius === "0px" && button.fontSize === "11px";
+        })()`));
+      }
+      if (theme === "xp" || theme === "win7") {
+        check(`${theme} has full window chrome with controls beneath the title`, await evalIso(`(() => {
+          const root = document.querySelector("#sesli-oku-host").shadowRoot;
+          const bar = root.querySelector(".bar").getBoundingClientRect();
+          const title = root.querySelector(".brand").getBoundingClientRect();
+          const transport = root.querySelector(".transport").getBoundingClientRect();
+          const close = root.querySelector("button.close").getBoundingClientRect();
+          const host = document.querySelector("#sesli-oku-host").getBoundingClientRect();
+          return Math.abs(bar.width - title.width) < 2 && transport.top >= title.bottom &&
+            close.top >= host.top && close.bottom <= title.bottom && close.right <= title.right + 1;
+        })()`));
+        check(`${theme} popup title and controls use compact era dimensions`, await evalPopup(`(() => {
+          const header = document.querySelector("header").getBoundingClientRect();
+          const logo = document.querySelector(".logo").getBoundingClientRect();
+          const title = getComputedStyle(document.querySelector("h1"));
+          const select = document.querySelector("#theme").getBoundingClientRect();
+          return header.height <= 34 && logo.height === 18 && parseFloat(title.fontSize) <= 13 && select.height <= 25;
+        })()`));
+        check(`${theme} close control keeps its title-bar shape`, await evalIso(`(() => {
+          const root = document.querySelector("#sesli-oku-host").shadowRoot;
+          const close = getComputedStyle(root.querySelector("button.close"));
+          return close.position === "absolute" && close.width === ${JSON.stringify(theme === "xp" ? "25px" : "43px")} &&
+            close.height === ${JSON.stringify(theme === "xp" ? "25px" : "20px")};
+        })()`));
+      }
+      if (theme === "win95") {
+        await evalIso(`(() => {
+          const style = document.createElement("style");
+          style.id = "test-base-conflict";
+          style.textContent = '@layer base { .wrap[data-theme="win95"] .bar .transport button.primary { background: magenta; border-radius: 999px; height: 99px; } }';
+          document.querySelector("#sesli-oku-host").shadowRoot.appendChild(style);
+        })()`);
+        check("theme layer wins over more specific modern base rules", await evalIso(`(() => {
+          const button = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("button.primary");
+          const style = getComputedStyle(button);
+          return style.backgroundColor === "rgb(192, 192, 192)" && style.borderRadius === "0px" && style.height === "28px";
+        })()`));
+        await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#test-base-conflict").remove()`);
+      }
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 360, height: 780, deviceScaleFactor: 1, mobile: false });
+      await evalIso("__sesliOkuTest.toggleSettings(true)");
+      await WAIT(100);
+      check(`${theme} controls fit a narrow viewport`, await evalIso(`(() => {
+        const root = document.querySelector("#sesli-oku-host").shadowRoot;
+        return [...root.querySelectorAll(".bar, .settings, select, button")].every(element => {
+          if (!element.getClientRects().length) return true;
+          const rect = element.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= document.documentElement.clientWidth + 1;
+        });
+      })()`));
+      await pageCdp.send("Emulation.clearDeviceMetricsOverride");
+      await WAIT(100);
+      if (process.env.SCREENSHOT_DIR) {
+        await evalIso("__sesliOkuTest.toggleSettings(true)");
+        await WAIT(100);
+        const { writeFileSync } = await import("node:fs");
+        for (const [label, client] of [["toolbar", pageCdp], ["popup", popupCdp]]) {
+          const shot = await client.send("Page.captureScreenshot", { format: "png" });
+          writeFileSync(path.join(process.env.SCREENSHOT_DIR, `${theme}-${label}.png`), Buffer.from(shot.data, "base64"));
+        }
+      }
+    }
+    console.log("\n  Theme transitions");
+    await WAIT(400);
+    const beforeFade = await snapshot();
+    const fadeResult = await evalIso(`(async () => {
+      const host = document.querySelector("#sesli-oku-host");
+      const root = host.shadowRoot;
+      const before = host.getBoundingClientRect().height;
+      await SesliOkuThemes.set("win95");
+      const copy = root.querySelector("[data-theme-snapshot]");
+      const safe = !!copy && copy.inert && copy.getAttribute("aria-hidden") === "true" &&
+        !copy.querySelector("[id]") && getComputedStyle(copy).pointerEvents === "none";
+      await new Promise(resolve => setTimeout(resolve, 70));
+      const middle = host.getBoundingClientRect().height;
+      const fading = parseFloat(getComputedStyle(root.querySelector(".wrap")).opacity);
+      await new Promise(resolve => setTimeout(resolve, 350));
+      return { before, middle, after: host.getBoundingClientRect().height, fading, safe,
+        copies: root.querySelectorAll("[data-theme-snapshot]").length,
+        overflow: host.style.overflow,
+        active: root.querySelector(".wrap").hasAttribute("data-theme-transition") };
+    })()`, true);
+    check("theme skins crossfade without duplicate interactive controls", fadeResult.safe && fadeResult.fading > 0 && fadeResult.fading < 1, JSON.stringify(fadeResult));
+    check("toolbar height interpolates between the old and new themes", Math.abs(fadeResult.before - fadeResult.after) > 5 &&
+      fadeResult.middle > Math.min(fadeResult.before, fadeResult.after) &&
+      fadeResult.middle < Math.max(fadeResult.before, fadeResult.after), JSON.stringify(fadeResult));
+    check("completed transition restores scrolling and removes its snapshot", fadeResult.copies === 0 && !fadeResult.active && fadeResult.overflow === "auto", JSON.stringify(fadeResult));
+    check("theme animation preserves playback state", (await snapshot()).session === beforeFade.session && (await snapshot()).paused === beforeFade.paused);
+    await evalIso(`(async () => {
+      await SesliOkuThemes.set("xp");
+      await SesliOkuThemes.set("win7");
+      await SesliOkuThemes.set("modern");
+    })()`, true);
+    await WAIT(400);
+    check("rapid theme switches settle on the last selection without leftover layers", await evalIso(`(() => {
+      const host = document.querySelector("#sesli-oku-host");
+      return host.shadowRoot.querySelector(".wrap").dataset.theme === "modern" &&
+        !host.shadowRoot.querySelector("[data-theme-snapshot], [data-theme-transition]") && host.style.overflow === "auto";
+    })()`));
+    await pageCdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await evalIso(`SesliOkuThemes.set("xp")`, true);
+    check("reduced motion applies themes without animation", await evalIso(`(() => {
+      const root = document.querySelector("#sesli-oku-host").shadowRoot;
+      return root.querySelector(".wrap").dataset.theme === "xp" && !root.querySelector("[data-theme-snapshot], [data-theme-transition]");
+    })()`));
+    await pageCdp.send("Emulation.setEmulatedMedia", { features: [] });
+    await evalIso(`SesliOkuThemes.set("win7")`, true);
+    await pageCdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await WAIT(60);
+    check("enabling reduced motion finishes an active animation cleanly", await evalIso(`!document.querySelector("#sesli-oku-host").shadowRoot.querySelector("[data-theme-snapshot], [data-theme-transition]")`));
+    await pageCdp.send("Emulation.setEmulatedMedia", { features: [] });
+    await popupCdp.send("Page.bringToFront");
+    await evalPopup(`SesliOkuThemes.set("modern")`);
+    await WAIT(400);
+    await evalPopup(`SesliOkuThemes.set("win95")`);
+    check("popup uses the same theme crossfade", await evalPopup(`!!document.querySelector("body[data-theme-transition]") && !!document.querySelector("[data-theme-snapshot]")`));
+    await WAIT(400);
+    check("popup transition removes snapshots and restores natural height", await evalPopup(`!document.querySelector("[data-theme-snapshot], [data-theme-transition]") && !document.body.style.overflow`));
+    await pageCdp.send("Page.bringToFront");
+
+    await evalPopup(`(() => { const select = document.querySelector("#theme"); select.value = "xp"; select.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await waitFor("popup theme syncs back to toolbar", async () => (await snapshot()).theme === "xp");
+    check("popup changes apply to the active toolbar", (await snapshot()).theme === "xp");
+    await popupCdp.send("Page.reload");
+    await waitFor("persisted theme after reopening popup", () => evalPopup(`document.body?.dataset.theme === "xp" && document.querySelector("#theme")?.value === "xp"`));
+    check("theme survives reopening popup", await evalPopup(`document.body.dataset.theme === "xp"`));
+    await evalIso(`chrome.storage.local.set({ appearanceTheme: "unknown-theme" })`, true);
+    await waitFor("invalid theme falls back", async () => (await snapshot()).theme === "modern");
+    check("unknown saved themes fall back to modern", await evalPopup(`document.body.dataset.theme === "modern"`));
+    await evalIso(`chrome.storage.local.set({ appearanceTheme: "modern" })`, true);
+    await evalIso("__sesliOkuTest.toggleSettings(false)");
+    await WAIT(150);
+
     // ------------------------------------------------------ stop cleanup
     // Closing the player must remove every trace of the reading state, even
     // when a leftover overlay from an older content-script instance exists.
@@ -848,6 +1048,16 @@ async function main() {
       );
     }
 
+    await evalIso(`chrome.storage.local.set({ appearanceTheme: "win7" })`, true);
+    const reloadContextCount = contexts.length;
+    await pageCdp.send("Page.navigate", { url: `${fixtureUrl}&themeReload=1` });
+    activeContext = await waitFor("isolated world for persisted theme", () => contexts.slice(reloadContextCount).find(context => context.auxData?.type === "isolated"));
+    await waitFor("reloaded theme test hook", () => evalIso("typeof window.__sesliOkuTest === 'object'"));
+    await evalIso("__sesliOkuTest.start(); __sesliOkuTest.pause()");
+    await waitFor("saved theme on new page", async () => (await snapshot()).theme === "win7");
+    check("saved theme applies after page reload", await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".wrap").dataset.theme === "win7"`));
+    await evalIso("__sesliOkuTest.stop()");
+
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failures.length) {
       console.log("\nFailures:");
@@ -856,6 +1066,7 @@ async function main() {
     }
   } finally {
     try {
+      popupCdp?.close();
       pageCdp?.close();
     } catch {}
     if (pageTarget) {

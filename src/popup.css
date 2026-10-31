@@ -1,3 +1,5 @@
+@layer base, themes;
+@layer base {
 :root {
   color-scheme: light dark;
   --bg: #f7f7f3;
@@ -226,4 +228,6 @@ button.link {
 
 button.link:hover {
   color: var(--text);
+}
+
 }

@@ -32,3 +32,13 @@ handling in src/tts.js follow the same public implementation.
 This project is not affiliated with, endorsed by, or sponsored by Microsoft
 Corporation. "Microsoft", "Edge" and "Read Aloud" are trademarks of Microsoft
 Corporation.
+
+Classic theme assets and adapted control borders
+-----------------------------------------------
+
+The pixelated MS Sans Serif font files in src/vendor/98.css and classic
+control border definitions adapted in src/themes.js come from:
+
+    jdan/98.css — https://github.com/jdan/98.css
+    Copyright 2020 Jordan Scales
+    License: MIT (full text: src/vendor/98.css/LICENSE)

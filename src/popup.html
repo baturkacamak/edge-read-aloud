@@ -6,7 +6,7 @@
     <title>Sesli Oku</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
-  <body>
+  <body data-theme="modern">
     <header>
       <div class="logo" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="22" height="22">
@@ -41,6 +41,11 @@
     </label>
 
     <div class="field">
+      <label for="theme">Görünüm · Tema</label>
+      <select id="theme" aria-label="Görünüm teması"></select>
+    </div>
+
+    <div class="field">
       <label for="voice">Ses</label>
       <select id="voice"></select>
     </div>
@@ -70,6 +75,7 @@
       <button id="stop" class="link">Durdur</button>
     </footer>
 
+    <script src="themes.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

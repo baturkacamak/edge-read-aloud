@@ -113,7 +113,7 @@ async function ensureContent(tabId) {
     });
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["src/content.js"],
+      files: ["src/themes.js", "src/content.js"],
     });
   } catch {
     return false;
