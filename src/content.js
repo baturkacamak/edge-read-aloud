@@ -2,7 +2,7 @@
  * Sesli Oku — content script.
  *
  * Extracts readable blocks, turns them into paragraph-sized chunks, asks the
- * service worker for audio, and plays it with a small shadow-DOM player.
+ * service worker for audio, and plays it with a fixed shadow-DOM toolbar.
  */
 
 (() => {
@@ -14,6 +14,15 @@
   // them so a newly injected instance cannot create a second fixed highlight.
   for (const node of document.querySelectorAll("#sesli-oku-host")) node.remove();
   for (const node of document.querySelectorAll("#sesli-oku-spotlight")) node.remove();
+  for (const node of document.querySelectorAll("#sesli-oku-spacer, #sesli-oku-layout")) node.remove();
+  for (const element of document.querySelectorAll("[data-sesli-oku-header]")) {
+    try {
+      const original = JSON.parse(element.getAttribute("data-sesli-oku-header"));
+      if (original.value) element.style.setProperty("top", original.value, original.priority);
+      else element.style.removeProperty("top");
+    } catch {}
+    element.removeAttribute("data-sesli-oku-header");
+  }
   for (const node of document.querySelectorAll(".edge-ra-current")) {
     node.classList.remove("edge-ra-current");
   }
@@ -58,6 +67,8 @@
     highlighted: null,
     host: null,
     ui: null,
+    voicesLoaded: false,
+    voicesLoading: false,
     spotlight: null,
     spotlightRange: null,
     spotlightRect: null,
@@ -293,6 +304,284 @@
 
   // ---------------------------------------------------------------- player UI
 
+  const languageNames = (() => {
+    try {
+      return new Intl.DisplayNames(["tr"], { type: "language" });
+    } catch {
+      return null;
+    }
+  })();
+
+  function localeLabel(locale) {
+    const [language, region] = (locale || "").split("-");
+    let name = language || locale;
+    try {
+      name = languageNames?.of(language) || name;
+    } catch {}
+    name = name.charAt(0).toUpperCase() + name.slice(1);
+    return region ? `${name} (${region})` : name;
+  }
+
+  function voiceLabel(voice) {
+    const short = voice.ShortName || "";
+    const pieces = short.split("-");
+    let name = pieces.slice(2).join("-") || short;
+    name = name.replace(/MultilingualNeural$|Neural$/, "");
+    const gender =
+      voice.Gender === "Female"
+        ? "Kadın"
+        : voice.Gender === "Male"
+          ? "Erkek"
+          : "";
+    return gender ? `${name} · ${gender}` : name;
+  }
+
+  function formatPercent(value) {
+    const number = Number(value) || 0;
+    return `${number > 0 ? "+" : ""}${number}%`;
+  }
+
+  function renderVoices(voices) {
+    if (!state.ui) return;
+    const select = state.ui.voice;
+    const groups = new Map();
+    for (const voice of voices) {
+      const locale = voice.Locale || "other";
+      if (!groups.has(locale)) groups.set(locale, []);
+      groups.get(locale).push(voice);
+    }
+
+    const sorted = [...groups.keys()].sort((a, b) => {
+      if (a.startsWith("tr")) return -1;
+      if (b.startsWith("tr")) return 1;
+      return localeLabel(a).localeCompare(localeLabel(b), "tr");
+    });
+
+    select.innerHTML = "";
+    for (const locale of sorted) {
+      const group = document.createElement("optgroup");
+      group.label = localeLabel(locale);
+      const voicesInGroup = groups
+        .get(locale)
+        .sort((a, b) => voiceLabel(a).localeCompare(voiceLabel(b), "tr"));
+      for (const voice of voicesInGroup) {
+        const option = document.createElement("option");
+        option.value = voice.ShortName;
+        option.textContent = voiceLabel(voice);
+        group.appendChild(option);
+      }
+      select.appendChild(group);
+    }
+
+    if (!voices.some((voice) => voice.ShortName === state.settings.voice)) {
+      const option = document.createElement("option");
+      option.value = state.settings.voice;
+      option.textContent = state.settings.voice;
+      select.appendChild(option);
+    }
+    select.value = state.settings.voice;
+    state.voicesLoaded = true;
+  }
+
+  async function loadVoices() {
+    if (state.voicesLoaded || state.voicesLoading || !state.ui) return;
+    state.voicesLoading = true;
+    state.ui.voice.disabled = true;
+    try {
+      const response = await sendToBackground({ type: "GET_VOICES" });
+      renderVoices(response.voices || []);
+    } catch {
+      renderVoices([]);
+    } finally {
+      state.voicesLoading = false;
+      if (state.ui) state.ui.voice.disabled = false;
+    }
+  }
+
+  function syncSettingsInputs() {
+    if (!state.ui) return;
+    const ui = state.ui;
+    const hasVoice = Array.from(ui.voice.options).some(
+      (option) => option.value === state.settings.voice
+    );
+    if (hasVoice) ui.voice.value = state.settings.voice;
+    ui.rate.value = String(state.settings.rate);
+    ui.volume.value = String(state.settings.volume);
+    ui.rateValue.textContent = formatPercent(state.settings.rate);
+    ui.volumeValue.textContent = formatPercent(state.settings.volume);
+  }
+
+  function saveReadingSettings() {
+    try {
+      chrome.storage.local
+        .set({ settings: { ...state.settings } })
+        .catch(() => {});
+    } catch {
+      // Orphaned content script: storage is no longer reachable.
+    }
+  }
+
+  function applyReadingSettings(patch) {
+    state.settings = normalizeSettings({ ...state.settings, ...patch });
+    syncSettingsInputs();
+    saveReadingSettings();
+    state.cache.clear();
+    if (!state.playing) return;
+
+    // Apply the new voice/rate immediately, but keep the user's manual scroll
+    // pause and pause state intact.
+    const wasPaused = state.paused;
+    const followReading = state.followReading;
+    const lastManualScrollAt = state.lastManualScrollAt;
+    startSession(state.index);
+    state.followReading = followReading;
+    state.lastManualScrollAt = lastManualScrollAt;
+    if (wasPaused) {
+      state.paused = true;
+      state.audio?.pause();
+      updateUi();
+    }
+  }
+
+  let layoutFrame = null;
+  let savedOverflowAnchor = null;
+
+  function changePlayerLayout(change) {
+    const root = document.documentElement;
+    if (layoutFrame === null) {
+      savedOverflowAnchor = {
+        value: root.style.getPropertyValue("overflow-anchor"),
+        priority: root.style.getPropertyPriority("overflow-anchor"),
+      };
+    } else {
+      cancelAnimationFrame(layoutFrame);
+    }
+    root.style.setProperty("overflow-anchor", "none", "important");
+    change();
+    // Commit the new geometry while anchoring is disabled. Otherwise opening
+    // the settings can be cancelled visually by an automatic scroll jump.
+    root.getBoundingClientRect();
+    layoutFrame = requestAnimationFrame(() => {
+      if (savedOverflowAnchor.value) {
+        root.style.setProperty("overflow-anchor", savedOverflowAnchor.value, savedOverflowAnchor.priority);
+      } else {
+        root.style.removeProperty("overflow-anchor");
+      }
+      layoutFrame = null;
+      repositionSpotlight();
+    });
+  }
+
+  let pageLayoutStyle = null;
+  let layoutObserver = null;
+  let pageObserver = null;
+  let pageLayoutFrame = null;
+  const shiftedHeaders = new Map();
+
+  function restoreShiftedHeaders() {
+    for (const [element, original] of shiftedHeaders) {
+      if (original.value) element.style.setProperty("top", original.value, original.priority);
+      else element.style.removeProperty("top");
+      element.removeAttribute("data-sesli-oku-header");
+    }
+    shiftedHeaders.clear();
+  }
+
+  function syncPageLayout() {
+    if (!state.host || state.host.style.display === "none") return;
+    changePlayerLayout(() => {
+      // Measure the site's own layout before applying our offset, so repeated
+      // resizes never accumulate padding or header offsets.
+      pageLayoutStyle?.remove();
+      restoreShiftedHeaders();
+      const padding = getComputedStyle(document.documentElement).paddingTop;
+      const height = state.host.getBoundingClientRect().height;
+      const rules = [`html:root { padding-top: calc(${padding} + ${height}px) !important; }`];
+      for (const element of document.body?.querySelectorAll("*") || []) {
+        if (element === state.host || element.id.startsWith("sesli-oku-")) continue;
+        const style = getComputedStyle(element);
+        if (style.position !== "fixed" && style.position !== "sticky") continue;
+        const top = parseFloat(style.top);
+        if (!Number.isFinite(top) || top < 0 || top > 160) continue;
+        if (element.getBoundingClientRect().width < window.innerWidth * .3) continue;
+        // A nested header is positioned within its parent's layout already.
+        let nested = false;
+        for (let parent = element.parentElement; parent && parent !== document.documentElement; parent = parent.parentElement) {
+          const parentStyle = getComputedStyle(parent);
+          if (shiftedHeaders.has(parent) ||
+              (style.position === "sticky" && /(auto|scroll|hidden)/.test(parentStyle.overflowY))) {
+            nested = true;
+            break;
+          }
+        }
+        if (nested) continue;
+        const original = {
+          value: element.style.getPropertyValue("top"),
+          priority: element.style.getPropertyPriority("top"),
+        };
+        element.setAttribute("data-sesli-oku-header", JSON.stringify(original));
+        shiftedHeaders.set(element, original);
+        element.style.setProperty("top", `${top + height}px`, "important");
+      }
+      pageLayoutStyle ||= document.createElement("style");
+      pageLayoutStyle.id = "sesli-oku-layout";
+      pageLayoutStyle.textContent = rules.join("\n");
+      document.documentElement.appendChild(pageLayoutStyle);
+    });
+  }
+
+  function schedulePageLayout() {
+    if (pageLayoutFrame !== null) return;
+    pageLayoutFrame = requestAnimationFrame(() => {
+      pageLayoutFrame = null;
+      syncPageLayout();
+    });
+  }
+
+  function releasePageLayout() {
+    layoutObserver?.disconnect();
+    pageObserver?.disconnect();
+    if (pageLayoutFrame !== null) cancelAnimationFrame(pageLayoutFrame);
+    pageLayoutFrame = null;
+    pageLayoutStyle?.remove();
+    restoreShiftedHeaders();
+  }
+
+  function observePageLayout() {
+    layoutObserver ||= new ResizeObserver(schedulePageLayout);
+    layoutObserver.observe(state.host);
+    pageObserver ||= new MutationObserver((records) => {
+      if (records.some(record => [...record.addedNodes, ...record.removedNodes].some(
+        node => node.nodeType === Node.ELEMENT_NODE && !node.id?.startsWith("sesli-oku-")
+      ))) schedulePageLayout();
+    });
+    if (document.body) pageObserver.observe(document.body, { childList: true, subtree: true });
+    syncPageLayout();
+  }
+
+  function toggleSettings(force) {
+    if (!state.ui) return;
+    const open =
+      typeof force === "boolean"
+        ? force
+        : !state.ui.settings.classList.contains("open");
+    changePlayerLayout(() => {
+      state.ui.settings.classList.toggle("open", open);
+    });
+    syncPageLayout();
+    state.ui.settingsButton.setAttribute("aria-expanded", String(open));
+    if (open) {
+      syncSettingsInputs();
+      loadVoices();
+    }
+  }
+
+  function removeLegacySpacers() {
+    for (const spacer of document.querySelectorAll("#sesli-oku-spacer")) {
+      spacer.remove();
+    }
+  }
+
   function buildUi() {
     if (state.host?.isConnected) {
       for (const host of document.querySelectorAll("#sesli-oku-host")) {
@@ -301,12 +590,18 @@
       return state.ui;
     }
     for (const host of document.querySelectorAll("#sesli-oku-host")) host.remove();
+    removeLegacySpacers();
 
     const host = document.createElement("div");
     host.id = "sesli-oku-host";
     host.style.cssText =
-      "all: initial; position: fixed; z-index: 2147483647; left: 50%; " +
-      "bottom: 20px; transform: translateX(-50%); pointer-events: none;";
+      "all: initial; position: fixed; inset: 0 0 auto; z-index: 2147483647; " +
+      "display: block; width: 100%; box-sizing: border-box; margin: 0; " +
+      "padding: 0; border: 0; max-width: none; max-height: 100dvh; overflow: auto; " +
+      "overflow-anchor: none;";
+    // The top layer paints above the root's margins, transforms, and site UI.
+    // Manual popovers stay open when users interact with the page.
+    host.setAttribute("popover", "manual");
 
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `
@@ -318,21 +613,37 @@
           pointer-events: auto;
           display: flex;
           flex-direction: column;
-          align-items: center;
-          gap: 8px;
-          max-width: min(92vw, 560px);
+          width: 100%;
+          box-sizing: border-box;
+          background: #171b18;
+          border-bottom: 1px solid #343c30;
+          box-shadow: 0 2px 8px rgba(0,0,0,.12);
+          color-scheme: dark;
+          position: relative;
+          animation: reveal 180ms ease-out;
+        }
+        @keyframes reveal {
+          from { opacity: 0; transform: translateY(-8px); }
+          to { opacity: 1; transform: translateY(0); }
         }
         .bar {
           display: flex;
           align-items: center;
-          gap: 4px;
-          padding: 7px 9px;
-          background: rgba(17, 20, 19, .92);
-          border: 1px solid rgba(255,255,255,.12);
-          border-radius: 999px;
-          box-shadow: 0 10px 30px rgba(0,0,0,.35);
-          backdrop-filter: blur(12px);
+          gap: 8px;
+          min-height: 64px;
+          width: 100%;
+          max-width: 1120px;
+          margin: 0 auto;
+          padding: 10px 24px;
+          box-sizing: border-box;
+          flex-wrap: wrap;
         }
+        .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+        .brand svg { width: 22px; height: 22px; color: #d9f27a; }
+        .brand strong { font-size: 13px; font-weight: 650; letter-spacing: .01em; }
+        .brand small { display: block; color: #9ca793; font-size: 10px; }
+        .transport, .actions { display: flex; align-items: center; gap: 4px; }
+        .actions { margin-left: auto; }
         button {
           all: unset;
           box-sizing: border-box;
@@ -340,13 +651,17 @@
           place-items: center;
           width: 34px;
           height: 34px;
-          border-radius: 50%;
+          border-radius: 8px;
           cursor: pointer;
           color: #f7f7f5;
           font-size: 15px;
           transition: background .15s ease, color .15s ease;
         }
         button:hover { background: rgba(255,255,255,.12); }
+        button:focus-visible, select:focus-visible, input:focus-visible {
+          outline: 2px solid #d9f27a;
+          outline-offset: 3px;
+        }
         button:active { transform: scale(.96); }
         button.primary {
           background: #d9f27a;
@@ -362,6 +677,7 @@
           font-variant-numeric: tabular-nums;
           font-size: 12px;
         }
+        button.icon { font-size: 17px; }
         button.close { font-size: 16px; color: #b9bdb6; }
         button.follow {
           display: none;
@@ -392,18 +708,116 @@
           font-size: 12px;
         }
         .error { color: #ffb4a8; }
+        .settings {
+          display: none;
+          box-sizing: border-box;
+          width: 100%;
+          max-width: 1120px;
+          margin: 0 auto;
+          padding: 16px 24px 20px;
+          border-top: 1px solid rgba(255,255,255,.10);
+          grid-template-columns: 2fr 1fr 1fr;
+          gap: 24px;
+        }
+        .settings.open { display: grid; }
+        .field { min-width: 0; }
+        .field label {
+          display: block;
+          margin-bottom: 6px;
+          font-size: 11px;
+          letter-spacing: .02em;
+          color: #b9bdb6;
+        }
+        .label-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        .label-row label { margin-bottom: 6px; }
+        .label-row output {
+          margin-bottom: 6px;
+          color: #d9f27a;
+          font-size: 11px;
+          font-variant-numeric: tabular-nums;
+        }
+        select {
+          box-sizing: border-box;
+          width: 100%;
+          padding: 8px 10px;
+          border-radius: 9px;
+          border: 1px solid rgba(255,255,255,.16);
+          background: rgba(255,255,255,.06);
+          color: #f7f7f5;
+          font: inherit;
+          font-size: 12px;
+        }
+        select option, select optgroup { background: #171b18; color: #f7f7f5; }
+        input[type="range"] {
+          box-sizing: border-box;
+          width: 100%;
+          margin: 0;
+          accent-color: #d9f27a;
+        }
+        @media (max-width: 640px) {
+          .bar { gap: 6px; padding: 8px 12px; }
+          .brand small { display: none; }
+          .brand { gap: 6px; }
+          .settings { padding: 14px 12px; gap: 16px; grid-template-columns: 1fr; }
+          .status { min-width: 48px; font-size: 11px; }
+          button.follow { padding: 0 7px; }
+        }
+        @media (max-width: 460px) {
+          .brand { flex-basis: 100%; }
+          button { width: 30px; height: 32px; }
+          button.primary { width: 34px; height: 34px; }
+          .bar { column-gap: 4px; }
+          .actions { gap: 2px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .wrap { animation: none; }
+          button { transition: none; }
+        }
       </style>
       <div class="wrap">
-        <div class="bar">
+        <div class="bar" role="toolbar" aria-label="Sesli okuma kontrolleri">
+          <div class="brand">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/></svg>
+            <div><strong>Sesli Oku</strong><small>Dinle, takip et.</small></div>
+          </div>
+          <div class="transport">
           <button data-act="prev" title="Önceki paragraf">⏮</button>
           <button data-act="toggle" class="primary" title="Oynat / duraklat">▶</button>
           <button data-act="next" title="Sonraki paragraf">⏭</button>
-          <span class="divider"></span>
+          </div>
+          <span class="divider" aria-hidden="true"></span>
           <span class="status">Hazır</span>
           <button data-act="follow" class="follow" title="Okumaya dön">Okumaya dön</button>
-          <span class="divider"></span>
+          <div class="actions">
           <button data-act="speed" class="speed" title="Oynatma hızı">1.0×</button>
+          <button data-act="settings" class="icon" title="Okuma ayarları" aria-label="Okuma ayarları" aria-expanded="false" aria-controls="sesli-oku-settings">⚙</button>
           <button data-act="close" class="close" title="Durdur ve kapat">✕</button>
+          </div>
+        </div>
+        <div id="sesli-oku-settings" class="settings" role="region" aria-label="Okuma ayarları">
+          <div class="field">
+            <label for="sesli-oku-voice">Ses</label>
+            <select id="sesli-oku-voice"><option>Yükleniyor…</option></select>
+          </div>
+          <div class="field">
+            <div class="label-row">
+              <label for="sesli-oku-rate">Okuma hızı</label>
+              <output id="sesli-oku-rate-value">0%</output>
+            </div>
+            <input id="sesli-oku-rate" type="range" min="-50" max="100" step="5" value="0" />
+          </div>
+          <div class="field">
+            <div class="label-row">
+              <label for="sesli-oku-volume">Ses düzeyi</label>
+              <output id="sesli-oku-volume-value">0%</output>
+            </div>
+            <input id="sesli-oku-volume" type="range" min="-50" max="50" step="5" value="0" />
+          </div>
         </div>
       </div>`;
 
@@ -412,6 +826,13 @@
       toggle: shadow.querySelector("[data-act='toggle']"),
       speed: shadow.querySelector("[data-act='speed']"),
       follow: shadow.querySelector("[data-act='follow']"),
+      settingsButton: shadow.querySelector("[data-act='settings']"),
+      settings: shadow.querySelector(".settings"),
+      voice: shadow.querySelector("#sesli-oku-voice"),
+      rate: shadow.querySelector("#sesli-oku-rate"),
+      rateValue: shadow.querySelector("#sesli-oku-rate-value"),
+      volume: shadow.querySelector("#sesli-oku-volume"),
+      volumeValue: shadow.querySelector("#sesli-oku-volume-value"),
     };
 
     shadow.addEventListener("click", (event) => {
@@ -423,12 +844,34 @@
       else if (action === "next") skip(1);
       else if (action === "speed") cycleSpeed();
       else if (action === "follow") resumeFollow();
+      else if (action === "settings") toggleSettings();
       else if (action === "close") stop();
+    });
+
+    shadow.addEventListener("input", (event) => {
+      if (event.target === ui.rate) {
+        ui.rateValue.textContent = formatPercent(ui.rate.value);
+      } else if (event.target === ui.volume) {
+        ui.volumeValue.textContent = formatPercent(ui.volume.value);
+      }
+    });
+
+    shadow.addEventListener("change", (event) => {
+      if (event.target === ui.voice) {
+        applyReadingSettings({ voice: ui.voice.value });
+      } else if (event.target === ui.rate) {
+        applyReadingSettings({ rate: Number(ui.rate.value) });
+      } else if (event.target === ui.volume) {
+        applyReadingSettings({ volume: Number(ui.volume.value) });
+      }
     });
 
     document.documentElement.appendChild(host);
     state.host = host;
     state.ui = ui;
+    host.showPopover();
+    observePageLayout();
+    syncSettingsInputs();
     return ui;
   }
 
@@ -442,14 +885,26 @@
     clearTimeout(state.hideTimer);
     state.hideTimer = setTimeout(() => {
       if (!state.playing && state.host) {
-        state.host.style.display = "none";
+        toggleSettings(false);
+        changePlayerLayout(() => {
+          state.host.hidePopover();
+          state.host.style.display = "none";
+          releasePageLayout();
+        });
+        removeLegacySpacers();
       }
     }, delay);
   }
 
   function updateUi() {
     if (!state.ui) return;
-    if (state.host) state.host.style.display = "block";
+    if (state.host?.style.display === "none") {
+      changePlayerLayout(() => {
+        state.host.style.display = "block";
+        state.host.showPopover();
+      });
+      observePageLayout();
+    }
 
     const ui = state.ui;
     ui.toggle.textContent = state.paused ? "▶" : state.playing ? "❚❚" : "▶";
@@ -791,7 +1246,8 @@
 
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    let top = 96;
+    let top = Math.max(96, state.host?.style.display !== "none"
+      ? (state.host?.getBoundingClientRect().bottom || 0) + 8 : 0);
     let bottom = 120;
 
     for (const x of [vw * 0.5, vw * 0.2, vw * 0.8]) {
@@ -816,7 +1272,7 @@
 
     viewportInsets = {
       at: now,
-      top: Math.min(top, Math.round(vh * 0.45)),
+      top: Math.min(top, vh - 32),
       bottom: Math.min(bottom, Math.round(vh * 0.55)),
     };
     return viewportInsets;
@@ -1449,6 +1905,7 @@
 
     setStatus("Durduruldu");
     updateUi();
+    toggleSettings(false);
     hideUiSoon(600);
     sendToBackground({ type: "STOP" }).catch(() => {});
   }
@@ -1731,6 +2188,7 @@
   document.addEventListener("scroll", onScroll, true);
   window.addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", repositionSpotlight);
+  window.addEventListener("resize", schedulePageLayout);
 
   const isPlayerTarget = (target) =>
     target instanceof Element && !!target.closest("#sesli-oku-host");
@@ -1801,6 +2259,17 @@
     true
   );
 
+  // Close the on-page settings panel when clicking anywhere outside the bar.
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      if (!state.ui?.settings.classList.contains("open")) return;
+      // Clicks inside the shadow root are retargeted to the host element.
+      if (event.target !== state.host) toggleSettings(false);
+    },
+    true
+  );
+
 
 
 
@@ -1832,6 +2301,7 @@
         showSpotlight(range);
         return true;
       },
+      toggleSettings: (force) => toggleSettings(force),
       snapshot: () => {
         const root = state.host?.shadowRoot;
         const highlight = CSS.highlights?.get(WORD_HIGHLIGHT);
@@ -1853,6 +2323,23 @@
             document.querySelectorAll("#sesli-oku-spotlight")
           ).filter((element) => getComputedStyle(element).opacity !== "0").length,
           hosts: document.querySelectorAll("#sesli-oku-host").length,
+          hostTop: state.host ? state.host.style.top : null,
+          hostBottom: state.host ? state.host.style.bottom : null,
+          hostPosition: state.host ? getComputedStyle(state.host).position : null,
+          hostParent: state.host?.parentElement?.tagName || null,
+          hostRect: state.host
+            ? (() => {
+                const rect = state.host.getBoundingClientRect();
+                return {
+                  top: rect.top,
+                  bottom: rect.bottom,
+                  height: rect.height,
+                };
+              })()
+            : null,
+          hostDisplay: state.host ? state.host.style.display : null,
+          settingsOpen: !!state.ui?.settings.classList.contains("open"),
+          settingsVoices: state.ui?.voice.querySelectorAll("option").length || 0,
           current: document.querySelectorAll(".edge-ra-current").length,
           scroller: (() => {
             const wordElement = range?.startContainer?.parentElement || null;

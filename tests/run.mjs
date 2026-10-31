@@ -251,6 +251,69 @@ async function main() {
       `spotlights=${state.spotlights}`
     );
 
+    // The toolbar stays fixed while a separate root offset reserves its space.
+    const normalContentTop = await evalIso(`(() => {
+      const node = document.querySelector("h1");
+      return node ? node.getBoundingClientRect().top + window.scrollY : null;
+    })()`);
+    check(
+      "top bar is fixed above the document body",
+      state.hostParent === "HTML" && state.hostPosition === "fixed",
+      `parent=${state.hostParent} position=${state.hostPosition}`
+    );
+    check(
+      "page starts below the top bar",
+      normalContentTop != null &&
+        !!state.hostRect &&
+        normalContentTop >= state.hostRect.height - 1,
+      JSON.stringify({ contentTop: normalContentTop, host: state.hostRect })
+    );
+
+    await evalIso("window.scrollTo(0, 300)");
+    await WAIT(300);
+    state = await snapshot();
+    check(
+      "top bar stays at the viewport top while the page scrolls",
+      !!state.hostRect && approx(state.hostRect.top, 0),
+      JSON.stringify(state.hostRect)
+    );
+    // WordPress reserves an HTML margin for its own fixed admin bar. Our
+    // controls must remain above both, including transformed page roots.
+    await evalIso(`(() => {
+      document.documentElement.style.marginTop = "32px";
+      document.documentElement.style.transform = "translateX(0px)";
+      const header = document.createElement("nav");
+      header.id = "test-admin-bar";
+      header.style.cssText = "position:fixed;top:0!important;left:0;right:0;height:32px;background:#30343a;z-index:2147483647";
+      document.body.prepend(header);
+    })()`);
+    await WAIT(250);
+    check("toolbar paints in the top layer above HTML", await evalIso(`(() => {
+      const host = document.querySelector("#sesli-oku-host");
+      return host.matches(":popover-open") && Math.abs(host.getBoundingClientRect().top) < 1;
+    })()`));
+    await evalIso(`document.documentElement.style.removeProperty("transform")`);
+    check("site fixed admin bar shifts below the toolbar", await evalIso(`(() => {
+      const host = document.querySelector("#sesli-oku-host").getBoundingClientRect();
+      const admin = document.querySelector("#test-admin-bar").getBoundingClientRect();
+      return admin.top >= host.bottom - 1;
+    })()`));
+    await evalIso(`document.querySelector("#test-admin-bar").remove(); document.documentElement.style.removeProperty("margin-top"); document.documentElement.style.removeProperty("transform")`);
+    await WAIT(150);
+    await evalIso("window.scrollTo(0, 0)");
+    await WAIT(300);
+    if (process.env.SCREENSHOT_DIR) {
+      const shot = await pageCdp.send("Page.captureScreenshot", {
+        format: "png",
+      });
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+      writeFileSync(
+        path.join(process.env.SCREENSHOT_DIR, "normal-top.png"),
+        Buffer.from(shot.data, "base64")
+      );
+    }
+
     // A second stale overlay injected mid-session must not survive the next
     // word update.
     await pageCdp.send("Runtime.evaluate", {
@@ -563,6 +626,133 @@ async function main() {
       JSON.stringify({ word: state.wordRect, scroller: state.scroller })
     );
 
+    // ------------------------------------------------------ top player layout
+    // A fixed top-layer toolbar reserves space above the site's root content.
+    console.log("\n  Top player layout");
+    await evalIso(`(() => {
+      const header = document.createElement("nav");
+      header.id = "test-fixed-header";
+      header.style.cssText = "position:fixed;top:0px!important;left:0;right:0;height:32px;background:#30343a";
+      document.body.prepend(header);
+    })()`);
+    await WAIT(150);
+    state = await snapshot();
+    check(
+      "player is a fixed top bar",
+      state.hostPosition === "fixed" &&
+        state.hostParent === "HTML",
+      `position=${state.hostPosition} parent=${state.hostParent}`
+    );
+    check(
+      "player has a real layout height",
+      !!state.hostRect && state.hostRect.height > 40,
+      JSON.stringify(state.hostRect)
+    );
+    const playerHeight = state.hostRect.height;
+    const contentTop = await evalIso(`(() => {
+      const node = document.querySelector("#reader") || document.querySelector("h1");
+      return node ? node.getBoundingClientRect().top : null;
+    })()`);
+    check(
+      "page content starts below the player",
+      !!state.hostRect &&
+        contentTop != null &&
+        contentTop >= state.hostRect.bottom - 1,
+      JSON.stringify({ contentTop, host: state.hostRect })
+    );
+
+    await evalIso("__sesliOkuTest.toggleSettings(true)");
+    await WAIT(150);
+    state = await snapshot();
+    check(
+      "settings panel opens from the player",
+      state.settingsOpen === true,
+      `open=${state.settingsOpen}`
+    );
+    const expandedContentTop = await evalIso(`document.querySelector("#reader").getBoundingClientRect().top`);
+    check(
+      "settings push the page down instead of covering it",
+      state.hostRect.height > playerHeight + 40 &&
+        approx(expandedContentTop - contentTop, state.hostRect.height - playerHeight),
+      JSON.stringify({ contentTop, expandedContentTop, playerHeight, expandedHeight: state.hostRect.height })
+    );
+    check(
+      "toolbar spans the viewport",
+      await evalIso(`Math.abs(document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".wrap").getBoundingClientRect().width - document.documentElement.clientWidth) < 2`)
+    );
+    check("fixed site headers follow the expanded toolbar height", await evalIso(`(() => {
+      const host = document.querySelector("#sesli-oku-host").getBoundingClientRect();
+      return Math.abs(document.querySelector("#test-fixed-header").getBoundingClientRect().top - host.bottom) < 2;
+    })()`));
+    check(
+      "settings panel includes a voice picker",
+      state.settingsVoices >= 1,
+      `options=${state.settingsVoices}`
+    );
+    if (process.env.SCREENSHOT_DIR) {
+      const shot = await pageCdp.send("Page.captureScreenshot", {
+        format: "png",
+      });
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+      writeFileSync(
+        path.join(process.env.SCREENSHOT_DIR, "player-settings.png"),
+        Buffer.from(shot.data, "base64")
+      );
+    }
+    await evalIso("__sesliOkuTest.toggleSettings(false)");
+    await WAIT(100);
+    state = await snapshot();
+    check(
+      "settings panel closes",
+      state.settingsOpen === false,
+      `open=${state.settingsOpen}`
+    );
+
+    check(
+      "closing settings returns the page to its previous position",
+      approx(await evalIso(`document.querySelector("#reader").getBoundingClientRect().top`), contentTop)
+    );
+
+    if (process.env.SCREENSHOT_DIR) {
+      const shot = await pageCdp.send("Page.captureScreenshot", {
+        format: "png",
+      });
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+      writeFileSync(
+        path.join(process.env.SCREENSHOT_DIR, "top-player.png"),
+        Buffer.from(shot.data, "base64")
+      );
+    }
+
+    // The controls and inline settings must still fit a phone-width viewport.
+    await pageCdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 360, height: 780, deviceScaleFactor: 1, mobile: false,
+    });
+    await evalIso("__sesliOkuTest.setFollow(false); __sesliOkuTest.toggleSettings(true)");
+    await WAIT(250);
+    check(
+      "narrow toolbar and settings fit the viewport",
+      await evalIso(`(() => {
+        const root = document.querySelector("#sesli-oku-host").shadowRoot;
+        return [".wrap", ".bar", ".settings", "select", ".follow"].every(selector => {
+          const element = root.querySelector(selector);
+          const rect = element.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= document.documentElement.clientWidth + 1 &&
+            element.scrollWidth <= element.clientWidth + 1;
+        });
+      })()`)
+    );
+    if (process.env.SCREENSHOT_DIR) {
+      const shot = await pageCdp.send("Page.captureScreenshot", { format: "png" });
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(path.join(process.env.SCREENSHOT_DIR, "narrow-player.png"), Buffer.from(shot.data, "base64"));
+    }
+    await evalIso("__sesliOkuTest.toggleSettings(false)");
+    await pageCdp.send("Emulation.clearDeviceMetricsOverride");
+    await WAIT(150);
+
     // ------------------------------------------------------ stop cleanup
     // Closing the player must remove every trace of the reading state, even
     // when a leftover overlay from an older content-script instance exists.
@@ -577,7 +767,7 @@ async function main() {
     );
 
     await evalIso("__sesliOkuTest.stop()");
-    await WAIT(400);
+    await WAIT(900);
     state = await snapshot();
     check(
       "stop hides the glow",
@@ -589,6 +779,41 @@ async function main() {
       state.current === 0,
       `current=${state.current}`
     );
+    check(
+      "stop removes the top bar and its space",
+      state.hostDisplay === "none" && state.hostRect.height === 0,
+      JSON.stringify({ display: state.hostDisplay, host: state.hostRect })
+    );
+    check("stop restores the site's original fixed header style", await evalIso(`(() => {
+      const header = document.querySelector("#test-fixed-header");
+      return header.style.top === "0px" && header.style.getPropertyPriority("top") === "important" &&
+        !header.hasAttribute("data-sesli-oku-header") && !document.querySelector("#sesli-oku-layout");
+    })()`));
+    const contentTopAfterStop = await evalIso(`(() => {
+      const node = document.querySelector("#reader") || document.querySelector("h1");
+      return node ? node.getBoundingClientRect().top : null;
+    })()`);
+    check(
+      "page moves back up after stopping",
+      contentTopAfterStop != null &&
+        contentTop != null &&
+        contentTop - contentTopAfterStop >= playerHeight - 2,
+      JSON.stringify({
+        before: contentTop,
+        after: contentTopAfterStop,
+        playerHeight,
+      })
+    );
+
+    await evalIso("__sesliOkuTest.start(); __sesliOkuTest.pause()");
+    await WAIT(250);
+    state = await snapshot();
+    check(
+      "starting again restores one toolbar and its layout space",
+      state.hosts === 1 && state.hostDisplay === "block" && approx(state.hostRect.height, playerHeight)
+    );
+    await evalIso("__sesliOkuTest.stop()");
+    await WAIT(900);
 
     // Simulate an orphaned overlay like the one an older extension version
     // can leave behind after an update.

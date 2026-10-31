@@ -9,7 +9,7 @@
 Edge'in doğal neural sesleriyle sayfaları, seçimleri ve imlecin olduğu yeri okuyan
 Manifest V3 eklentisi. API anahtarı yok, hesap yok, kurulum derdi yok.
 
-[![Version](https://img.shields.io/badge/version-0.6.8-84cc16?style=flat-square)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.7.0-84cc16?style=flat-square)](manifest.json)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0f172a?style=flat-square)](manifest.json)
 [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-116%2B-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)](https://www.microsoft.com/edge)
@@ -52,7 +52,7 @@ Edge'in kendi Read Aloud servisini doğrudan kullanarak bu boşluğu dolduruyor:
 | **Vurgu** | Paragraf + kelime vurgusu; yumuşak geçişli, tema duyarlı ışık halkası |
 | **Takip** | Metin görünümden çıkınca otomatik kaydırma; elle kaydırınca duraklar, **Okumaya dön** ile devam eder |
 | **Akış** | Paragraf buffer'ı + bir sonraki paragrafı önceden hazırlama; dev MP3 yok |
-| **Oynatıcı** | Canlı hız (0.75×–2×), duraklat, önceki/sonraki paragraf, durdur |
+| **Oynatıcı** | Sayfanın üstünde, içeriği aşağı iten oynatıcı; canlı hız (0.75×–2×), ses/hız/düzey ayarları, duraklat, önceki/sonraki paragraf, durdur |
 | **Erişim** | Klavye kısayolları, sağ tık menüsü ve popup |
 | **Gizlilik** | Geliştiriciye veri gitmez; ayarlar yalnızca `chrome.storage.local` içinde |
 | **Kurulum** | Derleme yok, bağımlılık yok; klasörü Edge'e yükle veya ZIP kullan |
@@ -64,7 +64,7 @@ Edge'in kendi Read Aloud servisini doğrudan kullanarak bu boşluğu dolduruyor:
     <td width="62%" valign="top">
       <img src="store/screenshots/01-sayfa.png" alt="Sayfa okuma ve kelime vurgusu" />
       <br />
-      <sub>Gerçek bir blog yazısında paragraf ve kelime vurgusu, alt oynatıcı.</sub>
+      <sub>Gerçek bir blog yazısında paragraf ve kelime vurgusu, üst oynatıcı.</sub>
     </td>
     <td width="38%" valign="top">
       <img src="store/screenshots/02-popup.png" alt="Sesli Oku popup arayüzü" />
@@ -116,6 +116,21 @@ seçin.
 | **Durdur** | Oynatıcıdaki ✕ · Simge → **Durdur** |
 | **Paragraf atla** | Oynatıcıdaki ⏮ / ⏭ |
 | **Hız** | Oynatıcıdaki `1.0×` düğmesi (0.75×–2×) |
+| **Ses ve okuma ayarları** | Oynatıcıdaki ⚙ düğmesi (ses, okuma hızı, ses düzeyi) |
+
+### Üst oynatıcı ve ayarlar
+
+Oynatıcı, sayfanın HTML katmanının üzerinde, ekranın en üstüne sabitlenmiş
+bir şerit olarak açılır ve kaydırma sırasında görünür kalır. Şerit için
+sayfanın üstünde alan ayrılır; içerik ve sabit üst menüler (WordPress yönetim
+çubuğu dahil) aşağı itilir. Okuma durdurulunca ayrılan alan kaldırılır ve
+menüler eski konumlarına döner.
+
+Oynatıcı, ekran genişliğini kaplayan bir şerittir. ⚙ düğmesi; ses seçimi,
+okuma hızı ve ses düzeyi ayarlarını şeridin altında açar. Ayarlar açılınca
+ayrılan alan büyür ve içerik aşağı itilir; kapanınca alan geri verilir.
+Değişiklikler anında uygulanır ve popup ile aynı `chrome.storage.local`
+kaydına yazılır.
 
 ### İmleçten okuma
 
@@ -272,6 +287,9 @@ Testler şunları doğrular:
 - Gemini/ChatGPT gibi **kendi iç scroll konteynerini** kullanan sayfalarda
   okumanın bu konteyneri kaydırması
 - **Okumaya dön** düğmesinin takibi yeniden başlatması
+- Oynatıcının HTML üzerinde sabit bir üst şerit olarak içeriği aşağı
+  itmesi ve kaydırma sırasında ekranın tepesinde sabit kalması
+- Üst oynatıcıdaki ⚙ ayarlar panelinin açılması ve ses listesini içermesi
 - Okuma durdurulduğunda paragraf/kelime vurgusunun ve ışık halkasının
   (eski bir içerik betiğinden kalan kopyalar dahil) tamamen kaldırılması
 
