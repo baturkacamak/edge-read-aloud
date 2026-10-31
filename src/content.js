@@ -230,14 +230,32 @@
   }
 
   async function sendToBackground(message) {
-    const response = await chrome.runtime.sendMessage({
-      target: "background",
-      ...message,
-    });
+    let request;
+    try {
+      request = chrome.runtime.sendMessage({
+        target: "background",
+        ...message,
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const response = await request;
     if (!response?.ok) {
       throw new Error(response?.error || "Arka plan servisi yanıt vermedi.");
     }
     return response;
+  }
+
+  // An extension update/reload leaves already-injected content scripts alive
+  // but disconnected from the extension. Such an orphan can no longer stop
+  // audio or talk to the player, so its highlight would otherwise stay on the
+  // page forever.
+  function extensionContextValid() {
+    try {
+      return Boolean(chrome?.runtime?.id);
+    } catch {
+      return false;
+    }
   }
 
   async function requestAudio(text) {
@@ -723,6 +741,13 @@
     state.spotlightScrollRange = null;
     state.spotlightDocTop = null;
     state.spotlightDocLeft = null;
+    // Hide every overlay, not only the element this instance happens to own.
+    // After an extension update an orphaned older content script can still
+    // have created its own #sesli-oku-spotlight; hiding just our node would
+    // leave that glow visible after reading stops.
+    for (const element of document.querySelectorAll("#sesli-oku-spotlight")) {
+      element.style.opacity = "0";
+    }
     if (state.spotlight) state.spotlight.style.opacity = "0";
   }
 
@@ -1193,6 +1218,7 @@
       state.audios.add(audio);
 
       const onTimeUpdate = () => {
+        if (session !== state.session || !state.playing) return;
         if (!boundaries.length) return;
         const ticks = audio.currentTime * 1e7;
         while (
@@ -1255,6 +1281,12 @@
         if (session !== state.session) {
           audio.pause();
           finish();
+          return;
+        }
+        if (!extensionContextValid()) {
+          audio.pause();
+          finish();
+          stop();
         }
       }, 400);
     });
@@ -1287,6 +1319,7 @@
         setStatus(error.message || "Ses üretilemedi", true);
         state.playing = false;
         state.paused = false;
+        clearHighlight();
         updateUi();
         hideUiSoon(5000);
         return;
@@ -1305,6 +1338,7 @@
         state.blockedIndex = index;
         state.playing = false;
         state.paused = false;
+        clearHighlight();
         updateUi();
         return;
       }
@@ -1815,6 +1849,9 @@
           index: state.index,
           total: state.chunks.length,
           spotlights: document.querySelectorAll("#sesli-oku-spotlight").length,
+          visibleSpotlights: Array.from(
+            document.querySelectorAll("#sesli-oku-spotlight")
+          ).filter((element) => getComputedStyle(element).opacity !== "0").length,
           hosts: document.querySelectorAll("#sesli-oku-host").length,
           current: document.querySelectorAll(".edge-ra-current").length,
           scroller: (() => {

@@ -9,7 +9,7 @@
 Edge'in doğal neural sesleriyle sayfaları, seçimleri ve imlecin olduğu yeri okuyan
 Manifest V3 eklentisi. API anahtarı yok, hesap yok, kurulum derdi yok.
 
-[![Version](https://img.shields.io/badge/version-0.6.7-84cc16?style=flat-square)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.6.8-84cc16?style=flat-square)](manifest.json)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-0f172a?style=flat-square)](manifest.json)
 [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-116%2B-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)](https://www.microsoft.com/edge)
@@ -272,6 +272,8 @@ Testler şunları doğrular:
 - Gemini/ChatGPT gibi **kendi iç scroll konteynerini** kullanan sayfalarda
   okumanın bu konteyneri kaydırması
 - **Okumaya dön** düğmesinin takibi yeniden başlatması
+- Okuma durdurulduğunda paragraf/kelime vurgusunun ve ışık halkasının
+  (eski bir içerik betiğinden kalan kopyalar dahil) tamamen kaldırılması
 
 Test sayfası `?sesliOkuTest=1` ile açılır; test hook'u yalnızca bu modda
 etkindir.

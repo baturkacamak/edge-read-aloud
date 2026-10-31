@@ -563,6 +563,54 @@ async function main() {
       JSON.stringify({ word: state.wordRect, scroller: state.scroller })
     );
 
+    // ------------------------------------------------------ stop cleanup
+    // Closing the player must remove every trace of the reading state, even
+    // when a leftover overlay from an older content-script instance exists.
+    console.log("\n  Stop cleanup");
+    await evalIso(`__sesliOkuTest.showWord("#p8", 0, 6)`);
+    await WAIT(200);
+    state = await snapshot();
+    check(
+      "glow is visible before stopping",
+      state.visibleSpotlights === 1,
+      `visible=${state.visibleSpotlights}`
+    );
+
+    await evalIso("__sesliOkuTest.stop()");
+    await WAIT(400);
+    state = await snapshot();
+    check(
+      "stop hides the glow",
+      state.visibleSpotlights === 0,
+      `visible=${state.visibleSpotlights}`
+    );
+    check(
+      "stop clears the paragraph highlight",
+      state.current === 0,
+      `current=${state.current}`
+    );
+
+    // Simulate an orphaned overlay like the one an older extension version
+    // can leave behind after an update.
+    await evalIso(`__sesliOkuTest.showWord("#p9", 0, 6)`);
+    await pageCdp.send("Runtime.evaluate", {
+      expression: `(() => {
+        const spot = document.createElement("div");
+        spot.id = "sesli-oku-spotlight";
+        spot.style.cssText = "position:fixed;left:300px;top:300px;width:60px;height:20px;opacity:1;background:#d9f27a;";
+        document.documentElement.appendChild(spot);
+      })()`,
+    });
+    await WAIT(200);
+    await evalIso("__sesliOkuTest.stop()");
+    await WAIT(400);
+    state = await snapshot();
+    check(
+      "stop hides orphaned overlays too",
+      state.visibleSpotlights === 0,
+      `visible=${state.visibleSpotlights} spotlights=${state.spotlights}`
+    );
+
     if (process.env.SCREENSHOT_DIR) {
       const shot = await pageCdp.send("Page.captureScreenshot", {
         format: "png",
