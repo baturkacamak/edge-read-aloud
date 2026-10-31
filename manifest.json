@@ -43,6 +43,7 @@
         "src/themes.js",
         "src/library.js",
         "src/settings.js",
+        "src/tools.js",
         "src/experience.js",
         "src/content.js"
       ],

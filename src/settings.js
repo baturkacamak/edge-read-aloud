@@ -8,6 +8,7 @@
     glowIntensity: 60, autoFollow: true, scrollBehavior: "smooth", paragraphDelay: 0,
     rememberPosition: true, autoVoice: false, turkishVoice: "tr-TR-EmelNeural", englishVoice: "en-US-AvaNeural",
     pronunciationRules: [], focusFontSize: 22, focusBackground: "theme",
+    focusFont: "serif", focusLineHeight: 1.8, focusWidth: 760, focusPadding: 20,
   });
   const number = (value, fallback, min, max) => Number.isFinite(Number(value))
     ? Math.max(min, Math.min(max, Number(value))) : fallback;
@@ -34,6 +35,10 @@
       pronunciationRules: Array.isArray(value.pronunciationRules) ? value.pronunciationRules.filter(rule => typeof rule?.from === "string" && rule.from.trim() && typeof rule.to === "string" && rule.to.trim()).slice(0, 200).map(rule => ({ from: rule.from.slice(0, 100), to: rule.to.slice(0, 200) })) : [],
       focusFontSize: number(value.focusFontSize ?? 22, 22, 16, 36),
       focusBackground: ["paper", "dark"].includes(value.focusBackground) ? value.focusBackground : "theme",
+      focusFont: ['sans','mono'].includes(value.focusFont) ? value.focusFont : 'serif',
+      focusLineHeight: number(value.focusLineHeight ?? 1.8, 1.8, 1.2, 2.6),
+      focusWidth: number(value.focusWidth ?? 760, 760, 400, 1200),
+      focusPadding: number(value.focusPadding ?? 20, 20, 8, 60),
     };
   }
   function highlightColorFor(value, theme) {
@@ -45,7 +50,17 @@
     { id: "study", name: "Ders", settings: { rate: -10, pitch: 0, volume: 0, playbackRate: 1, highlightMode: "both", highlightColor: "#f5d76e", highlightOpacity: 45, glowIntensity: 30, autoFollow: true, scrollBehavior: "smooth", paragraphDelay: 1000 } },
     { id: "night", name: "Gece", theme: "modern", settings: { rate: -15, pitch: -5, volume: -20, playbackRate: 1, highlightMode: "word", highlightColor: "#91b9ff", highlightOpacity: 25, glowIntensity: 10, autoFollow: true, scrollBehavior: "smooth", paragraphDelay: 700 } },
   ];
-  let settings = normalize();
+  let baseSettings = normalize();
+  let settings = baseSettings;
+  let contextUrl = ''; let siteSignature = '';let contextSpeech=null;
+  const speechKeys=['voice','rate','pitch','volume','autoVoice','turkishVoice','englishVoice','pronunciationRules'];
+  const recordedSpeech=()=>contextSpeech||(globalThis.SesliOkuDocument?.book?.kind==='audio'?globalThis.SesliOkuDocument.book.settings:null);
+  function forPage(base, url = contextUrl) { const rule=globalThis.SesliOkuLibrary?.current().sites?.[globalThis.SesliOkuLibrary.siteOrigin(url)];const value=normalize({...base,...rule?.settings});const recorded=recordedSpeech();if(recorded)for(const key of speechKeys)value[key]=recorded[key]??defaults[key];return value; }
+  function setContext(url, speech = null) {
+    contextSpeech=speech;contextUrl = url || ''; settings = forPage(baseSettings);
+    const origin=globalThis.SesliOkuLibrary?.siteOrigin(contextUrl); const rule=globalThis.SesliOkuLibrary?.current().sites?.[origin];
+    globalThis.SesliOkuThemes?.setSite(origin,rule); notify();
+  }
   let profiles = [];
   let timer = null;
   const revisions = { settings: 0, profiles: 0, timer: 0 };
@@ -54,7 +69,7 @@
   const notify = () => { for (const listener of listeners) listener(settings, profiles, timer); };
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes.settings) { revisions.settings++; settings = normalize(changes.settings.newValue); }
+    if (changes.settings) { revisions.settings++; baseSettings = normalize(changes.settings.newValue); settings = forPage(baseSettings); }
     if (changes.readingProfiles) { revisions.profiles++; profiles = cleanProfiles(changes.readingProfiles.newValue); }
     if (changes.readingTimer) { revisions.timer++; timer = changes.readingTimer.newValue || null; }
     if (changes.settings || changes.readingProfiles || changes.readingTimer) notify();
@@ -64,7 +79,7 @@
       .slice(0, 20).map(p => ({ id: p.id, name: p.name.slice(0, 40), settings: normalize(p.settings), theme: p.theme, colorMode: ["light", "dark"].includes(p.colorMode) ? p.colorMode : "original" })) : [];
   }
   const ready = chrome.storage.local.get(["settings", "readingProfiles", "readingTimer"]).then(stored => {
-    if (!revisions.settings) settings = normalize(stored.settings);
+    if (!revisions.settings) { baseSettings = normalize(stored.settings); settings = forPage(baseSettings); }
     if (!revisions.profiles) profiles = cleanProfiles(stored.readingProfiles);
     if (!revisions.timer) timer = stored.readingTimer || null;
     notify();
@@ -77,10 +92,14 @@
   }
   function update(patch) {
     return enqueue(async () => {
+      const origin=globalThis.SesliOkuLibrary?.siteOrigin(contextUrl);
+      if (globalThis.SesliOkuLibrary?.current().sites?.[origin]) {
+        const next=normalize({...settings,...patch});await globalThis.SesliOkuLibrary.mutate({type:'sitePatch',origin,patch:{settings:next}});settings=next;notify();return next;
+      }
       const stored = await chrome.storage.local.get("settings");
       const next = normalize({ ...stored.settings, ...patch });
       await chrome.storage.local.set({ settings: next });
-      settings = next;
+      baseSettings = next; settings = forPage(next);
       notify();
       return next;
     });
@@ -92,7 +111,7 @@
       const stored = await chrome.storage.local.get(["settings", "readingProfiles", "appearanceTheme", "appearanceMode"]);
       const list = cleanProfiles(stored.readingProfiles);
       const existing = list.find(p => p.name === label);
-      const profile = { id: existing?.id || `saved-${crypto.randomUUID()}`, name: label, settings: normalize(stored.settings), theme: stored.appearanceTheme || "modern", colorMode: stored.appearanceMode || "original" };
+      const profile = { id: existing?.id || `saved-${crypto.randomUUID()}`, name: label, settings: normalize(settings), theme: globalThis.SesliOkuThemes?.current() || stored.appearanceTheme || "modern", colorMode: globalThis.SesliOkuThemes?.mode() || stored.appearanceMode || "original" };
       const next = [...list.filter(p => p.id !== profile.id), profile];
       if (next.length > 20) throw new Error("En fazla 20 profil kaydedebilirsiniz.");
       await chrome.storage.local.set({ readingProfiles: next });
@@ -139,9 +158,31 @@
     let buffer = "";
     let lastTyped = 0;
     let rows = new Map();
+    let opening = null;
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    function finishOpening() { const animation=opening;opening=null;animation?.cancel(); }
+    function animateOpening() {
+      finishOpening();
+      if(motion.matches||typeof list.animate!=='function')return;
+      const style=getComputedStyle(list);
+      const effect=style.getPropertyValue('--drop-open-effect').trim();
+      const duration=parseFloat(style.getPropertyValue('--drop-open-duration'));
+      if(effect==='none'||!Number.isFinite(duration)||duration<=0)return;
+      const initial=list.dataset.openSide==='above'?'inset(100% 0 0 0)':'inset(0 0 100% 0)';
+      const frames=effect==='slide'?[{clipPath:initial},{clipPath:'inset(0 0 0 0)'}]:
+        effect==='fade'?[{opacity:0,transform:`translateY(${list.dataset.openSide==='above'?3:-3}px)`},{opacity:1,transform:'none'}]:null;
+      if(!frames)return;
+      const easing=style.getPropertyValue('--drop-open-easing').trim()||'linear';
+      const animation=list.animate(frames,{duration,easing});
+      opening=animation;
+      animation.finished.then(()=>{if(opening===animation)finishOpening();},()=>{});
+    }
+    const onMotionChange=event=>{if(event.matches)finishOpening();};
+    motion.addEventListener('change',onMotionChange);
     const enabled = () => [...select.options].map((option, index) => ({ option, index }))
       .filter(({ option }) => !option.disabled && !option.hidden && !option.closest("optgroup")?.disabled && !option.closest("optgroup")?.hidden);
     function close(restoreFocus = false) {
+      finishOpening();
       if (list.matches(":popover-open")) list.hidePopover();
       open = false; trigger.setAttribute("aria-expanded", "false"); trigger.removeAttribute("aria-activedescendant");
       if (activeDropdown === controller) activeDropdown = null;
@@ -183,6 +224,7 @@
       if (selected !== undefined) highlight(selected, false);
     }
     function position() {
+      if(open)finishOpening();
       const rect = select.getBoundingClientRect();
       const context = document.createElement("canvas").getContext("2d");
       if (context) context.font = getComputedStyle(select).font;
@@ -192,6 +234,7 @@
       const below = window.innerHeight - rect.bottom - 8;
       const above = rect.top - 8;
       const useBelow = below >= 140 || below >= above;
+      list.dataset.openSide=useBelow?'below':'above';
       const maxHeight = Math.max(24, Math.min(300, useBelow ? below : above));
       list.style.width = `${width}px`; list.style.maxHeight = `${maxHeight}px`;
       list.style.left = `${left}px`; list.style.top = `${rect.bottom}px`;
@@ -205,6 +248,7 @@
       render(); list.showPopover(); position(); open = true; activeDropdown = controller;
       trigger.setAttribute("aria-expanded", "true"); trigger.focus({ preventScroll: true });
       highlight(activeIndex);
+      animateOpening();
     }
     function commit(index = activeIndex, restoreFocus = true) {
       if (!enabled().some(item => item.index === index)) { close(restoreFocus); return; }
@@ -259,6 +303,7 @@
       event.preventDefault();
       const row = event.target.closest("[data-option-index]"); if (row && row.getAttribute("aria-disabled") !== "true") commit(Number(row.dataset.optionIndex));
     });
+    list.addEventListener('beforetoggle',event=>{if(event.newState==='closed')finishOpening();});
     list.addEventListener("toggle", () => {
       if (!list.matches(":popover-open")) { open = false; trigger.setAttribute("aria-expanded", "false"); trigger.removeAttribute("aria-activedescendant"); if (activeDropdown === controller) activeDropdown = null; }
     });
@@ -273,7 +318,7 @@
     const observer = new MutationObserver(sync);
     observer.observe(select, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["disabled", "selected", "label", "hidden"] });
     const controller = { sync, close, dispose() {
-      close(); observer.disconnect(); document.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", onResize);
+      close(); motion.removeEventListener('change',onMotionChange);observer.disconnect(); document.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", onResize);
       select.removeEventListener("focus", onNativeFocus); select.removeEventListener("click", onNativeClick); select.removeEventListener("change", sync);
       for (const label of labels) label.removeEventListener("click", onLabelClick);
       select.removeAttribute("aria-hidden"); select.classList.remove("pref-native-select");
@@ -335,6 +380,7 @@
         width: 100%; height: 100%; min-height: 0; opacity: 0; cursor: default; outline: none;
       }
       .preferences .pref-select-popup {
+        --drop-open-effect: none; --drop-open-duration: 0ms; --drop-open-easing: linear;
         --drop-track: #e4e7df; --drop-thumb: #7b8970;
         --drop-button: #d6ddcc; --drop-shadow: inset 0 0 0 1px #9aa38f;
         position: fixed; inset: auto; margin: 0; padding: 2px;
@@ -347,48 +393,78 @@
         box-shadow: 0 3px 8px #0004; cursor: default; color-scheme: light;
       }
       .preferences .pref-select-popup::backdrop { background: transparent; }
+      /* Each historical skin has an explicit policy; source notes and the
+         distinction between documented effects and chosen timings live in
+         docs/dropdown-motion.md. XP and 7 both document slide-open, not fade. */
+      [data-theme="modern"] .preferences .pref-select-popup {
+        --drop-open-effect: fade; --drop-open-duration: 120ms; --drop-open-easing: cubic-bezier(.2, 0, .2, 1);
+      }
+      [data-theme="win95"] .preferences .pref-select-popup {
+        --drop-open-effect: none; --drop-open-duration: 0ms; --drop-open-easing: linear;
+      }
+      [data-theme="win98"] .preferences .pref-select-popup {
+        --drop-open-effect: slide; --drop-open-duration: 200ms; --drop-open-easing: linear;
+      }
+      [data-theme="xp"] .preferences .pref-select-popup {
+        --drop-open-effect: slide; --drop-open-duration: 200ms; --drop-open-easing: linear;
+      }
+      [data-theme="win7"] .preferences .pref-select-popup {
+        --drop-open-effect: slide; --drop-open-duration: 200ms; --drop-open-easing: linear;
+      }
+      @media (prefers-reduced-motion: reduce) { [data-theme] .preferences .pref-select-popup { --drop-open-duration: 0ms; } }
       .preferences .pref-select-option { box-sizing: border-box; min-height: 22px; padding: 1px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .preferences .pref-select-option.grouped { padding-left: 18px; }
       .preferences .pref-select-group { font-weight: 700; padding: 3px 5px 0; color: var(--muted, #b9bdb6); white-space: nowrap; }
       .preferences .pref-select-option.active { background: var(--accent, #d9f27a); color: var(--accent-text, #14180f); }
       .preferences .pref-select-option[aria-disabled="true"] { color: #808080; }
-      :is([data-theme="win95"], [data-theme="win98"]) .preferences .pref-select-popup {
+      .focus-text {
+        --drop-track: var(--bg, #242a24); --drop-thumb: var(--muted, #7b8970);
+        --drop-button: var(--theme-button, var(--bg, #30372c)); --drop-shadow: var(--theme-raised, inset 0 0 0 1px #9aa38f);
+      }
+      :is([data-theme="win95"], [data-theme="win98"]) :is(.preferences .pref-select-popup, .focus-text) {
         --drop-track: repeating-conic-gradient(#fff 0 25%, #c0c0c0 0 50%) 0 / 2px 2px;
         --drop-thumb: #c0c0c0; --drop-button: #c0c0c0;
-        --drop-shadow: var(--theme-raised); border-radius: 0; border-color: #000;
+        --drop-shadow: var(--theme-raised);
+      }
+      :is([data-theme="win95"], [data-theme="win98"]) .preferences .pref-select-popup {
+        border-radius: 0; border-color: #000;
         font-size: 11px; line-height: 16px; padding: 1px; box-shadow: 1px 1px #808080;
       }
       :is([data-theme="win95"], [data-theme="win98"]) .preferences .pref-select-option { min-height: 18px; }
-      [data-theme="xp"] .preferences .pref-select-popup {
+      [data-theme="xp"] :is(.preferences .pref-select-popup, .focus-text) {
         --drop-track: linear-gradient(90deg, #f3f1e8, #fff);
         --drop-thumb: linear-gradient(90deg, #c8d8fa, #b7cbf0);
         --drop-button: #c5d5f5; --drop-shadow: inset 0 0 0 1px #fff, inset 0 0 0 2px #95ade4;
+      }
+      [data-theme="xp"] .preferences .pref-select-popup {
         border-color: #7f9db9; border-radius: 0; font-size: 11px;
       }
-      [data-theme="win7"] .preferences .pref-select-popup {
+      [data-theme="win7"] :is(.preferences .pref-select-popup, .focus-text) {
         --drop-track: linear-gradient(90deg, #e5e5e5, #f2f2f2);
         --drop-thumb: linear-gradient(90deg, #f5f5f5, #d4d4d4);
         --drop-button: #ededed; --drop-shadow: inset 0 0 0 1px #fff, inset 0 0 0 2px #aaa;
+      }
+      [data-theme="win7"] .preferences .pref-select-popup {
         border-color: #828790; border-radius: 0;
       }
-      .preferences .pref-select-popup::-webkit-scrollbar { width: 17px; height: 17px; }
-      .preferences .pref-select-popup::-webkit-scrollbar-track { background: var(--drop-track); }
-      .preferences .pref-select-popup::-webkit-scrollbar-thumb { min-height: 24px; background: var(--drop-thumb); box-shadow: var(--drop-shadow); }
-      .preferences .pref-select-popup::-webkit-scrollbar-button {
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar { width: 17px; height: 17px; }
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-track { background: var(--drop-track); }
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-thumb { min-height: 24px; background: var(--drop-thumb); box-shadow: var(--drop-shadow); }
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-button {
         display: block; height: 17px; width: 17px; background-color: var(--drop-button);
         box-shadow: var(--drop-shadow); background-position: center; background-repeat: no-repeat;
       }
-      .preferences .pref-select-popup::-webkit-scrollbar-button:vertical:decrement {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M3 0h1v1h1v1h1v1h1v1H0V3h1V2h1V1h1z' fill='%23334150'/%3E%3C/svg%3E");
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-button:vertical:decrement {
+        background-image: var(--scroll-up, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M3 0h1v1h1v1h1v1h1v1H0V3h1V2h1V1h1z' fill='%23334150'/%3E%3C/svg%3E"));
       }
-      .preferences .pref-select-popup::-webkit-scrollbar-button:vertical:increment {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M0 0h7v1H6v1H5v1H4v1H3V3H2V2H1V1H0z' fill='%23334150'/%3E%3C/svg%3E");
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-button:vertical:increment {
+        background-image: var(--scroll-down, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M0 0h7v1H6v1H5v1H4v1H3V3H2V2H1V1H0z' fill='%23334150'/%3E%3C/svg%3E"));
       }
-      .preferences .pref-select-popup::-webkit-scrollbar-button:vertical:start:increment,
-      .preferences .pref-select-popup::-webkit-scrollbar-button:vertical:end:decrement { display: none; }
-      [data-theme="xp"] .preferences .pref-select-popup::-webkit-scrollbar-thumb:hover { background: linear-gradient(90deg, #d5e2fb, #a9c3f0); }
-      [data-theme="win7"] .preferences .pref-select-popup::-webkit-scrollbar-thumb:hover { background: linear-gradient(90deg, #d9f1fc, #9fd1ef); }
-      .preferences .pref-select-popup::-webkit-scrollbar-button:active { box-shadow: var(--theme-pressed, inset 0 0 2px #0005); }
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-button:vertical:start:increment,
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-button:vertical:end:decrement { display: none; }
+      [data-theme="xp"] :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-thumb:hover { background: linear-gradient(90deg, #d5e2fb, #a9c3f0); }
+      [data-theme="win7"] :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-thumb:hover { background: linear-gradient(90deg, #d9f1fc, #9fd1ef); }
+      :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-button:active { box-shadow: var(--theme-pressed, inset 0 0 2px #0005); }
       @media (forced-colors: active) {
         .preferences .pref-select-popup { background: Canvas; color: CanvasText; border-color: CanvasText; }
         .preferences .pref-select-option.active { background: Highlight; color: HighlightText; }
@@ -557,6 +633,9 @@
         <div class="field"><label for="${id("highlightColor")}">Özel vurgu rengi</label><input id="${id("highlightColor")}" data-setting="highlightColor" type="color"><label class="pref-check"><input id="${id("theme-color")}" type="checkbox"><span>Tema rengini kullan</span></label></div>
         ${range("highlightOpacity", "Vurgu yoğunluğu", 0, 100, 5)}${range("glowIntensity", "Işık halkası yoğunluğu", 0, 100, 5)}
         ${range("focusFontSize", "Odak görünümü · Yazı boyutu", 16, 36, 1)}
+        ${select("focusFont", "Odak · Yazı tipi", [["serif", "Serif"], ["sans", "Sans serif"], ["mono", "Eş aralıklı"]])}
+        ${range("focusLineHeight", "Odak · Satır aralığı", 1.2, 2.6, .1)}
+        ${range("focusWidth", "Odak · Metin genişliği", 400, 1200, 40)}${range("focusPadding", "Odak · Kenar boşluğu", 8, 60, 2)}
         ${select("focusBackground", "Odak görünümü · Arka plan", [["theme", "Temaya göre"], ["paper", "Kâğıt"], ["dark", "Koyu"]])}
       </section>
       <section class="pref-pane" role="tabpanel" id="${id("pane-behavior")}" aria-labelledby="${id("tab-behavior")}" hidden>
@@ -585,6 +664,7 @@
     function sync(value) {
       for (const [key, element] of Object.entries(elements)) {
         if (!element || ["theme", "colorMode"].includes(key)) continue;
+        if(speechKeys.includes(key))element.disabled=!!recordedSpeech();
         if (element.type === "checkbox") element.checked = value[key];
         else if (["voice", "turkishVoice", "englishVoice"].includes(key)) {
           if (![...element.options].some(option => option.value === value[key])) { const option = document.createElement("option"); option.value = value[key]; option.textContent = value[key]; element.appendChild(option); }
@@ -592,7 +672,7 @@
         } else if (key === "highlightColor") element.value = highlightColorFor(value, globalThis.SesliOkuThemes.current());
         else element.value = String(value[key]);
         const output = byId(`${key}-value`);
-        if (output) output.textContent = key === "focusFontSize" ? `${value[key]} px` : key === "paragraphDelay" ? `${(value[key] / 1000).toFixed(1)} sn` : key === "pitch" ? `${value[key] > 0 ? "+" : ""}${value[key]} Hz` : `${["rate", "volume"].includes(key) && value[key] > 0 ? "+" : ""}${value[key]}%`;
+        if (output) output.textContent = ["focusFontSize", "focusWidth", "focusPadding"].includes(key) ? `${value[key]} px` : key === "focusLineHeight" ? `${Number(value[key]).toFixed(1)}×` : key === "paragraphDelay" ? `${(value[key] / 1000).toFixed(1)} sn` : key === "pitch" ? `${value[key] > 0 ? "+" : ""}${value[key]} Hz` : `${["rate", "volume"].includes(key) && value[key] > 0 ? "+" : ""}${value[key]}%`;
       }
       byId("theme-color").checked = value.highlightColor === "theme";
       elements.highlightColor.disabled = value.highlightColor === "theme";
@@ -611,7 +691,7 @@
       if (event.target.type === "range") {
         const value = { ...settings, [key]: Number(event.target.value) };
         const output = byId(`${key}-value`);
-        output.textContent = key === "focusFontSize" ? `${value[key]} px` : key === "paragraphDelay" ? `${(value[key] / 1000).toFixed(1)} sn` : key === "pitch" ? `${value[key]} Hz` : `${value[key]}%`;
+        output.textContent = ["focusFontSize", "focusWidth", "focusPadding"].includes(key) ? `${value[key]} px` : key === "focusLineHeight" ? `${Number(value[key]).toFixed(1)}×` : key === "paragraphDelay" ? `${(value[key] / 1000).toFixed(1)} sn` : key === "pitch" ? `${value[key]} Hz` : `${value[key]}%`;
       }
     });
     root.addEventListener("change", event => {
@@ -677,6 +757,7 @@
       dispose() { unsubscribe(); unsubscribeTheme(); libraryUi.dispose(); clearInterval(timerInterval); for (const dropdown of dropdowns) dropdown.dispose(); } };
   }
   function subscribe(listener) { listeners.add(listener); listener(settings, profiles, timer); return () => listeners.delete(listener); }
-  globalThis.SesliOkuSettings = Object.freeze({ defaults, normalize, ready, update, subscribe, mount, css, highlightColorFor, closeDropdowns,
+  globalThis.SesliOkuLibrary?.subscribe(value=>{const signature=JSON.stringify(value.sites||{});if(signature!==siteSignature){siteSignature=signature;setContext(contextUrl,contextSpeech);}});
+  globalThis.SesliOkuSettings = Object.freeze({ forPage, setContext, enhanceSelect, defaults, normalize, ready, update, subscribe, mount, css, highlightColorFor, closeDropdowns,
     current: () => settings, profiles: () => [...presets, ...profiles], saveProfile, removeProfile, applyProfile });
 })();

@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'none'; media-src 'self' blob:; worker-src 'self'; object-src 'none'">
+<title>Sesli Oku · Belge okuyucusu</title><link rel="stylesheet" href="reader.css"><link rel="stylesheet" href="content.css"></head>
+<body><script src="reader-bootstrap.js"></script><script src="themes.js"></script><script src="library.js"></script><script src="settings.js"></script><script src="vault.js"></script><script src="tools.js"></script><script src="experience.js"></script><script src="content.js"></script>
+<header role="banner"><h1>Belge ve çevrimdışı okuyucusu</h1><form id="document-controls"><label>PDF veya EPUB seç<input id="document-file" type="file" accept=".pdf,.epub,application/pdf,application/epub+zip"></label><button type="button" id="read-document" disabled>Sesli oku</button><button type="button" id="resume-document" disabled>Kaldığım yerden devam et</button><label>Bölüm<select id="document-section" disabled><option>Belge seçin</option></select></label></form><p id="reader-status" role="status">Bir PDF/EPUB seçin veya Kitaplıktan kayıt açın. Dosyalar bu cihazda işlenir.</p>
+<form id="pdf-password" hidden><label>PDF parolası<input type="password" autocomplete="off" required></label><button>Belgeyi aç</button><button type="button" id="password-cancel">İptal</button></form></header>
+<main><article id="document-text" aria-label="Belge metni"></article></main>
+<script src="vendor/fflate/fflate.js"></script><script type="module" src="reader.js"></script></body></html>

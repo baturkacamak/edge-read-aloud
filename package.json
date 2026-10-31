@@ -3,9 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs",
+    "vendor:readers": "node scripts/vendor-readers.mjs"
   },
   "devDependencies": {
+    "fflate": "0.8.3",
+    "pdfjs-dist": "5.5.207",
     "ws": "^8.18.0"
   }
 }

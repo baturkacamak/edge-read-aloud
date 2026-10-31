@@ -47,7 +47,23 @@ MP3 indirmede ses bellekte birleştirilir ve tarayıcının normal indirme
 mekanizmasıyla kaydedilir. İndirilen dosya, eklenti kaldırıldığında silinmez.
 Okuma listesi yalnızca kullanıcı başlattığında sıradaki adreslere gider.
 
-### 4. Ses listesi önbelleği
+### 4. Belge ve çevrimdışı ses kitaplığı
+
+Seçtiğiniz PDF/EPUB dosyasının metni cihazınızda ayrıştırılır. Belge metni,
+başlığı ve bölümleri; çevrimdışı hazırlamada ses ve kelime zamanları uzantının
+IndexedDB alanında saklanır. Bu kitaplığın sınırı toplam 250 MB'dir. Kitaplıktaki
+Sil düğmesiyle kayıt kaldırılır. PDF parolası kalıcı olarak saklanmaz.
+Taranmış PDF'ye OCR uygulanmaz; dosyalar ayrıştırılmak için bir sunucuya yüklenmez.
+Sesli okuma veya çevrimdışı ses hazırlama seçildiğinde ilgili metin ses üretimi
+için Microsoft servisine gönderilir. Hazır sesin çevrimdışı oynatımı sentez
+servisini kullanmaz. Özgün belge HTML'i veya betikleri okuyucuda çalıştırılmaz.
+
+Siteye özel tercihler, yer imi/liste notları ve etiketler de yerel depolamada
+tutulur. JSON yedeğini yalnızca kullanıcı indirir; yedek dosyasında adresler,
+notlar, konumlar ve tercihler bulunabilir. Belge ve ses dosyaları yedeğe dahil
+edilmez. İndirilen JSON ve MP3 dosyaları eklenti kaldırılınca silinmez.
+
+### 5. Ses listesi önbelleği
 
 Microsoft'un ses listesi, gereksiz istekleri önlemek için 7 gün boyunca yerel
 olarak önbelleğe alınır. Bu önbellek de cihazınızdan çıkmaz.

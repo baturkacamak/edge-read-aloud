@@ -1,5 +1,7 @@
 import "./library.js";
 import "./settings.js";
+import "./vault.js";
+import "./tools.js";
 const library = globalThis.SesliOkuLibrary;
 import { tts, listVoices } from "./tts.js";
 
@@ -109,7 +111,7 @@ async function ensureContent(tabId) {
     });
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["src/themes.js", "src/library.js", "src/settings.js", "src/experience.js", "src/content.js"],
+      files: ["src/themes.js", "src/library.js", "src/settings.js", "src/tools.js", "src/experience.js", "src/content.js"],
     });
   } catch {
     return false;
@@ -183,6 +185,7 @@ function initializeExtension() {
   chrome.storage.local.remove("readingTimer").catch(() => {});
   library.mutate({ type: "queueStop" }).catch(() => {});
   library.mutate({ type: "export", value: null }).catch(() => {});
+  globalThis.SesliOkuVault.list().then(books=>Promise.all(books.filter(book=>book.status==='working').map(book=>globalThis.SesliOkuVault.remove(book.id)))).catch(()=>{});
 }
 chrome.runtime.onInstalled.addListener(initializeExtension);
 chrome.runtime.onStartup.addListener(initializeExtension);
@@ -259,7 +262,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     chrome.storage.local.remove("readingTimer").catch(() => {});
   }
   if (library.current().queueTabId === tabId) library.mutate({ type: "queueStop" }).catch(() => {});
-  if (library.current().export?.tabId === tabId) library.mutate({ type: "export", value: { status: "canceled" } }).catch(() => {});
+  if (library.current().export?.tabId === tabId) {const id=library.current().export.bookId;if(id)globalThis.SesliOkuVault.remove(id).catch(()=>{});library.mutate({ type: "export", value: { status: "canceled" } }).catch(() => {});}
+  globalThis.SesliOkuVault.list().then(books=>Promise.all(books.filter(book=>book.status==='working'&&book.ownerTabId===tabId).map(book=>globalThis.SesliOkuVault.remove(book.id)))).catch(()=>{});
   queueStarted.delete(tabId);
 });
 
@@ -329,11 +333,26 @@ chrome.alarms.onAlarm.addListener(alarm => {
   }).catch(error => console.warn("[Sesli Oku]", error));
 });
 
+async function senderTabId(sender) {
+  if(sender?.tab?.id)return sender.tab.id;
+  if(sender?.url?.startsWith(chrome.runtime.getURL('src/reader.html'))){const tabs=await chrome.tabs.query({});return tabs.find(tab=>tab.url===sender.url)?.id;}
+  return undefined;
+}
 async function libraryAction(message, sender) {
   const { action, args = {} } = message;
   const tab = sender?.tab?.id ? sender.tab : await activeTab();
   const context = { url: sender?.tab?.id ? sender.url || tab?.url : tab?.url, title: tab?.title || "Sayfa" };
-  if (action === "context") return { context };
+  if (action === "context") {
+    if(context.url?.startsWith(chrome.runtime.getURL('src/reader.html'))){const id=new URL(context.url).searchParams.get('book');if(id){const book=await globalThis.SesliOkuVault.get(id);if(book?.kind==='audio')context.speech=book.settings;}}
+    return { context };
+  }
+  if (action === 'backup') return {backup:await globalThis.SesliOkuTools.backup(),message:'Yedek indiriliyor.'};
+  if (action === 'restore') { const owner=library.current().queueTabId;const parsed=globalThis.SesliOkuTools.validateBackup(args.backup);if(!parsed)throw new Error('Geçersiz yedek.');if(owner){try{await sendToTab(owner,{target:'content',type:'STOP'});}catch{}}return globalThis.SesliOkuTools.restore(args.backup); }
+  if (action === 'siteSave') { await library.mutate({type:action,...args});return {message:'Bu sitenin ayarları kaydedildi.'}; }
+  if (action === 'siteRemove' || action === 'itemEdit') { await library.mutate({type:action,...args});return {message:'Kitaplık güncellendi.'}; }
+  if (action === 'vaultList') return {books:await globalThis.SesliOkuVault.list()};
+  if (action === 'bookRemove') {await globalThis.SesliOkuVault.remove(args.id);return {message:'Yerel kayıt silindi.'};}
+  if (action === 'openReader' || action === 'bookOpen') {await chrome.tabs.create({url:chrome.runtime.getURL('src/reader.html')+(args.id?'?book='+encodeURIComponent(args.id):''),active:true});return {message:'Belge okuyucusu açıldı.'};}
   if (action === "queueAddUrl") { await library.mutate({ type: "queueAdd", url: args.url, title: args.title }); return { message: "Okuma listesine eklendi." }; }
   if (action === "queueStart") {
     if (library.current().queueRunning) return { message: "Okuma sırası zaten çalışıyor." };
@@ -373,7 +392,7 @@ async function handleMessage(message, sender) {
   switch (message.type) {
     case "LIBRARY_MUTATE": {
       const operation = message.operation;
-      if (operation?.type === "export" && operation.value?.status === "working") operation.value.tabId = sender?.tab?.id;
+      if (operation?.type === "export" && operation.value?.status === "working") operation.value.tabId = await senderTabId(sender);
       return { library: await library.mutate(operation) };
     }
     case "LIBRARY_ACTION": await library.ready; return libraryAction(message, sender);
@@ -397,6 +416,10 @@ async function handleMessage(message, sender) {
       if (sender?.tab?.id === readingTabId) readingTabId = null;
       return {};
     }
+    case 'VAULT_BEGIN': return {book:await globalThis.SesliOkuVault.begin({...message.value,ownerTabId:await senderTabId(sender)})};
+    case 'VAULT_PART': await globalThis.SesliOkuVault.putPart(message.id,message.index,message.part);return {};
+    case 'VAULT_FINISH': return await globalThis.SesliOkuVault.finish(message.id);
+    case 'VAULT_REMOVE': await globalThis.SesliOkuVault.remove(message.id);return {};
     case "GET_VOICES":
       return getVoices();
 

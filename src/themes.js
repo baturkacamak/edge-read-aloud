@@ -16,11 +16,13 @@
   const normalizeMode = value => ["light", "dark"].includes(value) ? value : "original";
   let mode = "original";
   let current = "modern";
+  let baseTheme = "modern"; let baseMode = "original"; let siteOrigin = ""; let siteSkin = null;
   let hydrated = false;
   const listeners = new Set();
   const publish = value => {
     globalThis.SesliOkuSettings?.closeDropdowns();
-    current = normalize(value);
+    baseTheme = normalize(value); current = normalize(siteSkin?.theme || baseTheme);
+    mode = normalizeMode(siteSkin?.colorMode || baseMode);
     if (current === "win95" || current === "win98") loadClassicFonts();
     for (const listener of listeners) listener(current);
   };
@@ -31,13 +33,13 @@
       if (changes.appearanceTheme) storageRevision.theme++;
       if (changes.appearanceMode) storageRevision.mode++;
       hydrated = true;
-      if (changes.appearanceMode) mode = normalizeMode(changes.appearanceMode.newValue);
-      publish(changes.appearanceTheme ? changes.appearanceTheme.newValue : current);
+      if (changes.appearanceMode) baseMode = normalizeMode(changes.appearanceMode.newValue);
+      publish(changes.appearanceTheme ? changes.appearanceTheme.newValue : baseTheme);
     }
   });
   const ready = chrome.storage.local.get(["appearanceTheme", "appearanceMode"]).then(stored => {
-    if (!storageRevision.mode) mode = normalizeMode(stored.appearanceMode);
-    publish(storageRevision.theme ? current : stored.appearanceTheme);
+    if (!storageRevision.mode) baseMode = normalizeMode(stored.appearanceMode);
+    publish(storageRevision.theme ? baseTheme : stored.appearanceTheme);
     hydrated = true;
     return current;
   }).catch(() => { hydrated = true; return current; });
@@ -634,11 +636,13 @@
         background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='17' height='19'%3E%3Crect x='.5' y='.5' width='16' height='18' rx='1' fill='%233b4653' stroke='%23717e89'/%3E%3Cpath d='m5 8 3.5 3L12 8' fill='none' stroke='%23edf0f3' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 1px center;
       }
       [data-color-mode="dark"] :is(option, optgroup) { color: var(--text); background: var(--panel); }
-      [data-color-mode="dark"] .preferences .pref-select-popup {
+      [data-color-mode="dark"] :is(.preferences .pref-select-popup, .focus-text) {
         color-scheme: dark; --drop-track: #20272e; --drop-thumb: var(--theme-button);
         --drop-button: #36424e; --drop-shadow: var(--theme-raised);
+        --scroll-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M3 0h1v1h1v1h1v1h1v1H0V3h1V2h1V1h1z' fill='%23edf0f3'/%3E%3C/svg%3E");
+        --scroll-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M0 0h7v1H6v1H5v1H4v1H3V3H2V2H1V1H0z' fill='%23edf0f3'/%3E%3C/svg%3E");
       }
-      [data-color-mode="dark"] .preferences .pref-select-popup::-webkit-scrollbar-thumb:hover { background: var(--theme-button-hover); }
+      [data-color-mode="dark"] :is(.preferences .pref-select-popup, .focus-text)::-webkit-scrollbar-thumb:hover { background: var(--theme-button-hover); }
       [data-color-mode="dark"] .preferences input[type="checkbox"] {
         background: var(--panel); border-color: var(--border); box-shadow: var(--theme-field);
       }
@@ -647,9 +651,9 @@
       [data-color-mode="dark"] .preferences input[type="checkbox"]:checked::after { filter: brightness(0) invert(1); }
       [data-theme]:not([data-theme="modern"])[data-color-mode="dark"] input[type="range"]::-webkit-slider-runnable-track { background: #17202a; border-color: #647584; box-shadow: 0 1px #68717a; }
       [data-theme]:not([data-theme="modern"])[data-color-mode="dark"] input[type="range"]::-webkit-slider-thumb { background: var(--theme-button); border-color: var(--theme-button-border); box-shadow: var(--theme-raised); }
-      [data-color-mode="dark"] :is(.preferences, .focus-text)::-webkit-scrollbar { width: 15px; }
-      [data-color-mode="dark"] :is(.preferences, .focus-text)::-webkit-scrollbar-track { background: #20272e; }
-      [data-color-mode="dark"] :is(.preferences, .focus-text)::-webkit-scrollbar-thumb { background: var(--theme-button); border: 1px solid var(--border); box-shadow: var(--theme-raised); }
+      [data-color-mode="dark"] .preferences::-webkit-scrollbar { width: 15px; }
+      [data-color-mode="dark"] .preferences::-webkit-scrollbar-track { background: #20272e; }
+      [data-color-mode="dark"] .preferences::-webkit-scrollbar-thumb { background: var(--theme-button); border: 1px solid var(--border); box-shadow: var(--theme-raised); }
       [data-theme="modern"][data-color-mode="light"] {
         color-scheme: light; --bg: #f7f7f3; --panel: #fff; --text: #1a1d1b;
         --muted: #59645b; --border: #cbd2c8; --accent: #c7e35a; --accent-text: #161a10;
@@ -666,6 +670,76 @@
       [data-theme="modern"][data-color-mode="light"] :is(select, input[type="number"], input[type="text"]) { background-color: var(--panel); color: var(--text); border-color: var(--border); }
       [data-theme="modern"][data-color-mode="light"] .divider { background: var(--border); }
       [data-theme="modern"][data-color-mode="light"] .settings { border-color: var(--border); }
+      /* Theme the native disclosure widget without replacing its keyboard or
+         expanded/collapsed semantics. Scope every rule to the extension root. */
+      [data-theme]:where(:not([data-theme="modern"])) details {
+        margin-block: 6px; border: 1px solid var(--border); border-radius: var(--theme-radius);
+        background: var(--panel); color: var(--text);
+      }
+      [data-theme]:where(:not([data-theme="modern"])) details > summary {
+        display: flex; align-items: center; gap: 6px; box-sizing: border-box;
+        min-height: 25px; margin: 0; padding: 4px 7px; list-style: none;
+        cursor: default; color: inherit; overflow-wrap: anywhere;
+      }
+      [data-theme]:where(:not([data-theme="modern"])) details > summary::-webkit-details-marker { display: none; }
+      [data-theme]:where(:not([data-theme="modern"])) details > summary::marker { content: ""; }
+      [data-theme]:where(:not([data-theme="modern"])) details > summary:focus-visible {
+        outline: 1px dotted currentColor; outline-offset: -4px;
+      }
+      [data-theme]:where(:not([data-theme="modern"])) details[open] > summary { border-bottom: 1px solid var(--border); }
+      [data-theme]:where(:not([data-theme="modern"])) details > :not(summary) { margin-left: 8px; margin-right: 8px; }
+      [data-theme]:where(:not([data-theme="modern"])) .library-item { margin: 0; }
+      [data-theme]:where(:not([data-theme="modern"])) .repeat-controls { margin: 0 6px 6px; padding: 0; }
+      :is([data-theme="win95"], [data-theme="win98"]) details {
+        border-radius: 0; background: var(--bg); box-shadow: inset 1px 1px #ffffff55;
+      }
+      :is([data-theme="win95"], [data-theme="win98"]) details > summary::before {
+        content: ""; flex: 0 0 11px; width: 11px; height: 11px; box-sizing: border-box;
+        border: 1px solid var(--theme-button-border); box-shadow: var(--theme-raised);
+        background-color: var(--theme-button);
+        background-image: linear-gradient(currentColor,currentColor), linear-gradient(currentColor,currentColor);
+        background-size: 7px 1px, 1px 7px; background-position: center; background-repeat: no-repeat;
+      }
+      :is([data-theme="win95"], [data-theme="win98"]) details[open] > summary::before {
+        background-image: linear-gradient(currentColor,currentColor); background-size: 7px 1px;
+      }
+      [data-theme="xp"] {
+        --disclosure-header: linear-gradient(#f7faff, #d8e5fa);
+        --disclosure-ink: #215dc6;
+        --disclosure-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='m4 4 3 3 3-3m-6 4 3 3 3-3' fill='none' stroke='%23215dc6' stroke-width='1.2'/%3E%3C/svg%3E");
+      }
+      [data-theme="xp"][data-color-mode="dark"] {
+        --disclosure-header: linear-gradient(#435a7b, #2d3e59); --disclosure-ink: #e3eeff;
+        --disclosure-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='m4 4 3 3 3-3m-6 4 3 3 3-3' fill='none' stroke='%23e3eeff' stroke-width='1.2'/%3E%3C/svg%3E");
+      }
+      [data-theme="xp"] details > summary {
+        border-radius: 3px; background: var(--disclosure-header); color: var(--disclosure-ink); font-weight: 700;
+      }
+      [data-theme="xp"] details[open] > summary { border-radius: 3px 3px 0 0; }
+      [data-theme="xp"] details > summary::after {
+        content: ""; margin-left: auto; flex: 0 0 16px; width: 16px; height: 16px;
+        box-sizing: border-box; border: 1px solid var(--border); border-radius: 50%;
+        background: var(--disclosure-chevron) center / 14px 14px no-repeat var(--panel);
+        box-shadow: inset 0 1px #ffffff80;
+      }
+      [data-theme="xp"] details[open] > summary::after { transform: rotate(180deg); }
+      [data-theme="xp"] details > summary:hover { filter: brightness(1.06); }
+      [data-theme="win7"] details { border-radius: 2px; }
+      [data-theme="win7"] details > summary { background: var(--bg); }
+      [data-theme="win7"] details > summary::before {
+        content: ""; flex: 0 0 10px; width: 10px; height: 10px; background: var(--muted);
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='m3 1 4 4-4 4Z' fill='none' stroke='white' stroke-width='1.2'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='m3 1 4 4-4 4Z' fill='none' stroke='white' stroke-width='1.2'/%3E%3C/svg%3E") center / contain no-repeat;
+        transition: transform 120ms ease;
+      }
+      [data-theme="win7"] details[open] > summary::before { transform: rotate(90deg); }
+      [data-theme="win7"] details > summary:hover::before { background: var(--accent); }
+      @media (prefers-reduced-motion: reduce) { [data-theme="win7"] details > summary::before { transition: none; } }
+      @media (forced-colors: active) {
+        [data-theme]:not([data-theme="modern"]) details { border-color: CanvasText; background: Canvas; color: CanvasText; }
+        [data-theme="xp"] details > summary { background: ButtonFace; color: ButtonText; }
+        [data-theme="win7"] details > summary::before { background: CanvasText; }
+      }
       @media (forced-colors: active) {
         [data-color-mode="dark"] { color-scheme: light dark; }
         [data-color-mode="dark"] .preferences input[type="checkbox"]:checked::after { filter: none; }
@@ -684,10 +758,12 @@
   globalThis.SesliOkuThemes = Object.freeze({
     choices, css, ready, normalize, normalizeMode, apply, finishTransition,
     mode: () => mode,
+    setSite(origin,rule) { siteOrigin=rule ? origin : ''; siteSkin=rule || null; publish(baseTheme); },
     async setMode(value) {
       const next = normalizeMode(value);
+      if (siteOrigin) { await globalThis.SesliOkuLibrary.mutate({type:'sitePatch',origin:siteOrigin,patch:{colorMode:next}});return next; }
       await chrome.storage.local.set({ appearanceMode: next });
-      mode = next; publish(current); return mode;
+      baseMode = next; publish(baseTheme); return mode;
     },
     current: () => current,
     fillSelect,
@@ -698,6 +774,7 @@
     },
     async set(value) {
       const theme = normalize(value);
+      if (siteOrigin) { await globalThis.SesliOkuLibrary.mutate({type:'sitePatch',origin:siteOrigin,patch:{theme}});return theme; }
       await chrome.storage.local.set({ appearanceTheme: theme });
       publish(theme);
       return theme;

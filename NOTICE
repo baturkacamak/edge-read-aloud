@@ -43,3 +43,14 @@ src/settings.js come from:
     jdan/98.css — https://github.com/jdan/98.css
     Copyright 2020 Jordan Scales
     License: MIT (full text: src/vendor/98.css/LICENSE)
+
+Document readers
+----------------
+Mozilla PDF.js 5.5.207 — https://github.com/mozilla/pdf.js
+License: Apache-2.0 (src/vendor/pdfjs/LICENSE).
+The bundled CMaps and standard fonts retain their original license files.
+PDF JavaScript scripting and dynamic evaluation are not enabled.
+
+fflate 0.8.3 — https://github.com/101arrowz/fflate
+Copyright 2020 Arjun Barrett. License: MIT (src/vendor/fflate/LICENSE).
+Used locally for EPUB ZIP extraction; no remote scripts are loaded.

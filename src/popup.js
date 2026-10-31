@@ -148,3 +148,5 @@ elements.stop.addEventListener("click", async () => {
 });
 
 init();
+
+callBackground('LIBRARY_ACTION', {action:'context'}).then(result=>preferences.setContext(result.context?.url,result.context?.speech)).catch(()=>{});

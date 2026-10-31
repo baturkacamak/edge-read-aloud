@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
+import { zipSync, strToU8 } from "fflate";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EDGE = process.env.EDGE_BIN || "microsoft-edge";
@@ -115,6 +116,15 @@ async function findDevToolsPort(profile) {
     await WAIT(100);
   }
   throw new Error("Edge did not expose a DevTools port");
+}
+
+function makePdfFixture(paragraphs=['First PDF paragraph for reading aloud.','Second PDF paragraph for reading aloud.']) {
+  const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>'];
+  for(const [index,text] of paragraphs.entries()){
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 7 0 R >> >> /Contents ${4+index*2} 0 R >>`);
+    const stream=`BT /F1 18 Tf 50 700 Td (${text}) Tj ET`;objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  }
+  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');let pdf='%PDF-1.4\n';const offsets=[0];for(const [index,object] of objects.entries()){offsets.push(Buffer.byteLength(pdf));pdf+=`${index+1} 0 obj\n${object}\nendobj\n`;}const xref=Buffer.byteLength(pdf);pdf+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`+offsets.slice(1).map(offset=>`${String(offset).padStart(10,'0')} 00000 n \n`).join('')+`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;return Buffer.from(pdf);
 }
 
 async function main() {
@@ -222,9 +232,115 @@ async function main() {
 
     const snapshot = () => evalIso("JSON.stringify(__sesliOkuTest.snapshot())").then(JSON.parse);
 
+    async function checkAdvancedTools() {
+      console.log('\n  Site profiles, study tools, backups and documents');
+      await pageCdp.send('Page.bringToFront');
+      await evalIso(`__sesliOkuTest.stop(); SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:false})`,true);
+      await evalIso(`__sesliOkuTest.syntheticAudio(300);__sesliOkuTest.startBlocks(['#p1','#p2']);__sesliOkuTest.pause();__sesliOkuTest.toggleSettings(true);document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="library"]').click()`);
+      await evalIso(`__sesliOkuTest.libraryAction('bookmark')`,true);
+      const bookmarkId=await evalIso(`SesliOkuLibrary.current().bookmarks.at(-1).id`);
+      await evalIso(`SesliOkuLibrary.action('itemEdit',{collection:'bookmarks',id:${JSON.stringify(bookmarkId)},note:'Çalışma notu <img src=x onerror=alert(1)>',tags:'ders, tekrar, ders'})`,true);
+      check('bookmark notes and deduplicated tags persist',await evalIso(`(()=>{const b=SesliOkuLibrary.current().bookmarks.find(b=>b.id===${JSON.stringify(bookmarkId)});return b.note.includes('Çalışma notu')&&b.tags.length===2;})()`));
+      const filtered=await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const q=r.querySelector('[type="search"]');q.value='çalışma notu';q.dispatchEvent(new Event('input',{bubbles:true}));return r.querySelectorAll('.library-bookmarks li').length===1&&!r.querySelector('.library-bookmarks img');})()`);
+      check('library search finds notes and renders imported markup as text',filtered);
+      await evalIso(`(()=>{const q=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[type="search"]');q.value='bulunmayan etiket';q.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      check('library search can filter out all bookmarks',await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelectorAll('.library-bookmarks li').length===0`));
+      await evalIso(`SesliOkuSettings.update({rate:15,focusFont:'sans',focusLineHeight:2.2,focusWidth:920,focusPadding:32})`,true);
+      await evalIso(`__sesliOkuTest.libraryAction('focus')`,true);
+      check('focus typography preferences apply to the reading surface',await evalIso(`(()=>{const f=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.focus-text');const s=getComputedStyle(f);return s.fontFamily.includes('Arial')&&parseFloat(s.lineHeight)/parseFloat(s.fontSize)>2.19&&f.closest('.focus-reader').style.getPropertyValue('--focus-width')==='920px'&&parseFloat(s.paddingTop)===32;})()`));
+      await evalIso(`__sesliOkuTest.libraryAction('focus')`,true);
+      const origin = await evalIso(`new URL(location.href).origin`);
+      const globalRate=await evalIso(`chrome.storage.local.get('settings').then(value=>value.settings.rate)`,true);
+      await evalIso(`SesliOkuLibrary.action('siteSave',{url:location.href,settings:{...SesliOkuSettings.current(),rate:35},theme:'xp',colorMode:'dark'})`,true);
+      await waitFor('site profile activates',()=>evalIso(`SesliOkuSettings.current().rate===35&&SesliOkuThemes.current()==='xp'&&SesliOkuThemes.mode()==='dark'`));
+      await evalIso(`SesliOkuSettings.update({rate:40})`,true);
+      check('site settings are editable without replacing global defaults',await evalIso(`chrome.storage.local.get('settings').then(value=>value.settings.rate===${globalRate} && SesliOkuLibrary.current().sites[${JSON.stringify(origin)}].settings.rate===40)`,true));
+      const open=async(url,isolated=false)=>{
+        const target=await json(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`,{method:'PUT'});const client=await connectCDP(target.webSocketDebuggerUrl);const contexts=[];client.onEvent(event=>{if(event.method==='Runtime.executionContextCreated')contexts.push(event.params.context);});await client.send('Runtime.enable');await client.send('Page.bringToFront');let context;
+        if(isolated)context=await waitFor('secondary isolated world',()=>contexts.find(c=>c.auxData?.type==='isolated'));
+        const evaluate=async(expression,awaitPromise=true)=>{const result=await client.send('Runtime.evaluate',{expression,contextId:context?.id,awaitPromise,returnByValue:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result.value;};
+        await waitFor('secondary reader runtime',()=>evaluate(`typeof SesliOkuSettings==='object'&&typeof __sesliOkuTest==='object'`));
+        return {client,evaluate,close:async()=>{client.close();await fetch(`http://127.0.0.1:${port}/json/close/${target.id}`);}};
+      };
+      const other=await open(`http://localhost:${serverPort}/fixture.html?sesliOkuTest=1`,true);
+      try{check('another site keeps its own settings and theme',await other.evaluate(`SesliOkuSettings.current().rate===${globalRate}&&SesliOkuThemes.current()!=='xp'`));}finally{await other.close();}
+      await pageCdp.send('Page.bringToFront');
+      const backup=await evalIso(`SesliOkuLibrary.action('backup')`,true);
+      check('backup includes custom site rules, notes, tags and focus preferences',backup.backup.format==='sesli-oku-backup'&&backup.backup.library.sites[origin].settings.rate===40&&backup.backup.library.bookmarks.some(b=>b.id===bookmarkId&&b.tags.includes('ders')));
+      const invalid=await evalIso(`(async()=>{try{await SesliOkuLibrary.action('restore',{backup:{format:'bad'}});return false;}catch{return true;}})()`,true);
+      check('invalid backups leave the current library intact',invalid&&await evalIso(`SesliOkuLibrary.current().bookmarks.some(b=>b.id===${JSON.stringify(bookmarkId)})`));
+      await evalIso(`SesliOkuLibrary.action('siteRemove',{origin:${JSON.stringify(origin)}})`,true);
+      await evalIso(`SesliOkuLibrary.action('bookmarkRemove',{id:${JSON.stringify(bookmarkId)}})`,true);
+      await evalIso(`SesliOkuLibrary.action('restore',{backup:${JSON.stringify(backup.backup)}})`,true);
+      check('backup restore recovers notes and the site profile',await evalIso(`SesliOkuLibrary.current().bookmarks.some(b=>b.id===${JSON.stringify(bookmarkId)})&&SesliOkuSettings.current().rate===40`));
+      await evalIso(`SesliOkuLibrary.action('siteRemove',{origin:${JSON.stringify(origin)}})`,true);
+      await evalIso(`__sesliOkuTest.stop();SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:false})`,true);
+      await evalIso(`__sesliOkuTest.syntheticAudio(180);__sesliOkuTest.startBlocks(['#p1','#p2']);__sesliOkuTest.pause();__sesliOkuTest.libraryAction('repeat',{mode:'paragraph'})`,true);
+      await waitFor('paragraph repeats',()=>evalIso(`__sesliOkuTest.snapshot().testPlayed.filter(part=>part.id==='p1').length>=3`));
+      check('paragraph loop repeats before advancing to the next paragraph',(await snapshot()).index===0);
+      check('repeat playback reuses prepared audio instead of synthesizing each pass',(await snapshot()).testRequests.length===2);
+      await evalIso(`__sesliOkuTest.libraryAction('repeat',{mode:'off'})`,true);
+      await waitFor('loop can complete normally',()=>evalIso(`!__sesliOkuTest.snapshot().playing`));
+      check('turning repetition off allows reading to finish',(await snapshot()).index===2);
+      await evalIso(`__sesliOkuTest.syntheticAudio(10000);__sesliOkuTest.startBlocks(['#p1','#p2'])`);
+      await waitFor('audio for A-B loop',()=>evalIso(`__sesliOkuTest.experience().total>10`));
+      await evalIso(`__sesliOkuTest.pause();__sesliOkuTest.seekTo(.15);__sesliOkuTest.libraryAction('repeat',{mode:'a'})`,true);
+      await evalIso(`__sesliOkuTest.seekTo(.9);__sesliOkuTest.libraryAction('repeat',{mode:'b'});__sesliOkuTest.libraryAction('repeat',{mode:'ab'})`,true);
+      await WAIT(1300);
+      check('A-B loop stays between the marked points',await evalIso(`__sesliOkuTest.experience().loop?.mode==='ab'&&__sesliOkuTest.experience().local<1.1&&__sesliOkuTest.snapshot().index===0`));
+      await evalIso(`__sesliOkuTest.libraryAction('repeat',{mode:'off'});__sesliOkuTest.libraryAction('repeat',{mode:'sentence-once'})`,true);
+      check('sentence replay seeks to its sentence start',await evalIso(`__sesliOkuTest.snapshot().index===0&&!__sesliOkuTest.snapshot().paused`));
+      await evalIso(`__sesliOkuTest.stop();__sesliOkuTest.syntheticAudio(220);__sesliOkuTest.startBlocks(['#p1','#p2']);__sesliOkuTest.pause();__sesliOkuTest.requestDelay(200);__sesliOkuTest.libraryAction('offlineSave')`,true);
+      await waitFor('cancelable offline preparation',()=>evalIso(`SesliOkuLibrary.current().export?.status==='working'&&SesliOkuLibrary.current().export.kind==='offline'`));
+      await evalIso(`__sesliOkuTest.libraryAction('cancelExport')`,true);await WAIT(450);
+      check('canceling offline preparation removes partial audio',await evalIso(`SesliOkuLibrary.action('vaultList').then(value=>!value.books.some(book=>book.status==='working')&&SesliOkuLibrary.current().export.status==='canceled')`,true));
+      await evalIso(`__sesliOkuTest.requestDelay(0);__sesliOkuTest.libraryAction('offlineSave')`,true);
+      await waitFor('offline audio ready',()=>evalIso(`SesliOkuLibrary.current().export?.kind==='offline'&&SesliOkuLibrary.current().export.status==='done'`));
+      const offlineId=await evalIso(`SesliOkuLibrary.current().export.id`);
+      check('offline preparation creates a ready local audio book',await evalIso(`SesliOkuLibrary.action('vaultList').then(value=>value.books.some(book=>book.id===${JSON.stringify(offlineId)}&&book.parts===2&&book.size>0))`,true));
+      await evalIso('__sesliOkuTest.stop()');
+      const extensionId=await evalIso('chrome.runtime.id');
+      const reader=await open(`chrome-extension://${extensionId}/src/reader.html?sesliOkuTest=1`);
+      try{
+        await waitFor('document APIs',()=>reader.evaluate(`typeof SesliOkuDocument.loadFile==='function'`));
+        await reader.evaluate(`SesliOkuDocument.loadBook(${JSON.stringify(offlineId)})`);
+        await reader.client.send('Network.enable');await reader.client.send('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:0,uploadThroughput:0});
+        await reader.evaluate(`window.__speechCalls=0;const originalSend=chrome.runtime.sendMessage.bind(chrome.runtime);chrome.runtime.sendMessage=(message,...args)=>{if(message.type==='SPEAK'){__speechCalls++;throw new Error('Offline TTS forbidden');}return originalSend(message,...args);};__sesliOkuTest.start()`);
+        await waitFor('offline playback finishes',()=>reader.evaluate(`__sesliOkuTest.snapshot().index===2&&!__sesliOkuTest.snapshot().playing`));
+        check('offline reading plays both stored parts without a synthesis request',await reader.evaluate(`__speechCalls===0`));
+        check('offline voice controls show the stored voice and are disabled',await reader.evaluate(`__sesliOkuTest.snapshot().settings.voice===SesliOkuDocument.book.settings.voice&&document.querySelector('#sesli-oku-host').shadowRoot.querySelector('#sesli-oku-voice').disabled`));
+        await reader.client.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+        const badPdf=Buffer.from('Not a PDF');const emptyPdf=makePdfFixture(['','']);
+        const invalid=await reader.evaluate(`(async()=>{try{await SesliOkuDocument.loadFile(new File([Uint8Array.from(atob(${JSON.stringify(badPdf.toString('base64'))}),c=>c.charCodeAt(0))],'broken.pdf'));return false;}catch{return true;}})()`);
+        check('malformed PDFs report an error without breaking the reader',invalid);
+        const scanned=await reader.evaluate(`(async()=>{try{await SesliOkuDocument.loadFile(new File([Uint8Array.from(atob(${JSON.stringify(emptyPdf.toString('base64'))}),c=>c.charCodeAt(0))],'scan.pdf'));return false;}catch(error){return error.message.includes('OCR');}})()`);
+        check('PDFs without a text layer explain the OCR limitation',scanned);
+        const pdf=makePdfFixture();
+        await reader.evaluate(`SesliOkuDocument.loadFile(new File([Uint8Array.from(atob(${JSON.stringify(pdf.toString('base64'))}),c=>c.charCodeAt(0))],'sample.pdf',{type:'application/pdf'}))`);
+        check('PDF import extracts text from both pages',await reader.evaluate(`document.querySelector('#document-text').textContent.includes('First PDF paragraph')&&document.querySelector('#document-text').textContent.includes('Second PDF paragraph')&&document.querySelector('#document-section').options.length===2`));
+        await reader.evaluate(`SesliOkuThemes.set('win95')`);await WAIT(350);await reader.evaluate(`document.querySelector('#document-section-trigger').click()`);
+        check('document text stays selectable inside a themed reader window',await reader.evaluate(`getComputedStyle(document.querySelector('#document-text p')).userSelect==='text'`));
+        check('document chapter selection shares the Windows scrollbar skin',await reader.evaluate(`getComputedStyle(document.querySelector('#document-section-listbox'),'::-webkit-scrollbar').width==='17px'&&document.querySelector('#document-section-listbox').matches(':popover-open')`));
+        await reader.evaluate('SesliOkuSettings.closeDropdowns();SesliOkuThemes.set("modern")');
+        const epub=zipSync({'META-INF/container.xml':strToU8('<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'),'OPS/book.opf':strToU8('<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Test book</dc:title></metadata><manifest><item id="one" href="one.xhtml"/><item id="two" href="two.xhtml"/></manifest><spine><itemref idref="two"/><itemref idref="one"/></spine></package>'),'OPS/one.xhtml':strToU8('<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Last chapter</h1><p>Last chapter reading paragraph with sufficient text to be read aloud.</p></body></html>'),'OPS/two.xhtml':strToU8('<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>First chapter</h1><script>window.bookScriptExecuted=true;</script><p onclick="alert(1)">First chapter reading paragraph with safe text.</p></body></html>')});
+        await reader.evaluate(`SesliOkuDocument.loadFile(new File([Uint8Array.from(atob(${JSON.stringify(Buffer.from(epub).toString('base64'))}),c=>c.charCodeAt(0))],'sample.epub',{type:'application/epub+zip'}))`);
+        check('EPUB follows spine order and never inserts document scripts or handlers',await reader.evaluate(`(()=>{const a=document.querySelector('#document-text');return a.textContent.indexOf('First chapter')<a.textContent.indexOf('Last chapter')&&!a.querySelector('script,[onclick]')&&!window.bookScriptExecuted;})()`));
+        await reader.evaluate(`__sesliOkuTest.syntheticAudio(120);__sesliOkuTest.start();__sesliOkuTest.pause();__sesliOkuTest.libraryAction('bookmark')`);
+        const stableId=await reader.evaluate(`SesliOkuDocument.book.id`);
+        const bookmark=await reader.evaluate(`SesliOkuLibrary.current().bookmarks.find(item=>item.url===location.href).id`);
+        check('document positions and bookmarks use a persistent local book URL',typeof bookmark==='string'&&stableId.startsWith('document-'));
+        if(process.env.ADVANCED_SCREENSHOT)writeFileSync('/tmp/advanced-reader.png',Buffer.from((await reader.client.send('Page.captureScreenshot')).data,'base64'));
+      }finally{await reader.close();}
+      await pageCdp.send('Page.bringToFront');
+      await evalIso(`SesliOkuLibrary.action('bookRemove',{id:${JSON.stringify(offlineId)}})`,true);
+      check('offline records can be removed from local storage',await evalIso(`SesliOkuLibrary.action('vaultList').then(value=>!value.books.some(book=>book.id===${JSON.stringify(offlineId)}))`,true));
+      await evalIso(`SesliOkuSettings.update(SesliOkuSettings.defaults);SesliOkuThemes.set('modern');SesliOkuThemes.setMode('original')`,true);
+    }
+    if(process.env.ADVANCED_ONLY){await checkAdvancedTools();console.log(`\n${passed} passed, ${failed} failed`);if(failed)process.exitCode=1;return;}
+
     async function checkClickReading() {
       console.log('\n  Click to continue reading');
-      await pageCdp.send('Emulation.setDeviceMetricsOverride',{width:1200,height:800,deviceScaleFactor:1,mobile:false});
+      await pageCdp.send('Emulation.setDeviceMetricsOverride',{width:1200,height:1000,deviceScaleFactor:1,mobile:false});
       await evalIso(`__sesliOkuTest.stop(); SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:false})`,true);
       await evalIso(`window.scrollTo(0,0);__sesliOkuTest.syntheticAudio(30000);__sesliOkuTest.startBlocks(['#p1','#p2','#p3'])`);
       await waitFor('initial audio before clicking',()=>evalIso(`__sesliOkuTest.snapshot().wordText==='Birinci'`));
@@ -304,6 +420,24 @@ async function main() {
       check("focus view presents readable source paragraphs", await evalIso(`(() => { const r = document.querySelector('#sesli-oku-host').shadowRoot; return !r.querySelector('.focus-reader').hidden && r.querySelectorAll('.focus-text p').length > 2 && r.querySelector('.focus-text p.active'); })()`));
       await evalIso(`SesliOkuSettings.update({ focusFontSize: 28, focusBackground: "paper" })`, true);
       check("focus font and paper background update live", await evalIso(`(() => { const r = document.querySelector('#sesli-oku-host').shadowRoot; return getComputedStyle(r.querySelector('.focus-text')).fontSize === '28px' && r.querySelector('.focus-reader').dataset.background === 'paper'; })()`));
+      const savedSkin = await evalIso(`({theme:SesliOkuThemes.current(),mode:SesliOkuThemes.mode()})`);
+      for (const theme of ['modern','win95','win98','xp','win7']) {
+        for (const mode of ['original','light','dark']) {
+          await evalIso(`(async()=>{await SesliOkuThemes.set(${JSON.stringify(theme)});await SesliOkuThemes.setMode(${JSON.stringify(mode)});})()`,true);
+          await WAIT(350);
+          await pageCdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:15,y:15,button:'none'});
+          const scrollSkin = await evalIso(`(() => {const r=document.querySelector('#sesli-oku-host').shadowRoot;const focus=r.querySelector('.focus-text');const list=r.querySelector('.pref-select-popup');const styles=node=>Object.fromEntries(['::-webkit-scrollbar','::-webkit-scrollbar-track','::-webkit-scrollbar-thumb','::-webkit-scrollbar-button'].map(part=>{const s=getComputedStyle(node,part);return [part,{width:s.width,color:s.backgroundColor,image:s.backgroundImage,shadow:s.boxShadow,display:s.display}];}));return {focus:styles(focus),list:styles(list),scrollable:focus.scrollHeight>focus.clientHeight};})()`);
+          check(`${theme} ${mode} focus scrollbar follows its theme`,scrollSkin.scrollable && scrollSkin.focus['::-webkit-scrollbar'].width==='17px' && (theme==='modern' ? scrollSkin.focus['::-webkit-scrollbar-thumb'].shadow!=='none' : JSON.stringify(scrollSkin.focus)===JSON.stringify(scrollSkin.list)),JSON.stringify(scrollSkin));
+          if(process.env.FEATURE_SCREENSHOT && mode!=='original')writeFileSync(`/tmp/focus-scroll-${theme}-${mode}.png`,Buffer.from((await pageCdp.send('Page.captureScreenshot')).data,'base64'));
+        }
+      }
+      await evalIso(`(async()=>{await SesliOkuThemes.set('win95');await SesliOkuThemes.setMode('light');})()`,true);await WAIT(350);
+      const arrow = await evalIso(`(() => {const f=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.focus-text');f.scrollTop=0;const b=f.getBoundingClientRect();return {x:b.right-8,y:b.bottom-8};})()`);
+      await pageCdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...arrow,button:'left',clickCount:1});
+      await pageCdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...arrow,button:'left',clickCount:1});
+      await waitFor('focus scrollbar arrow scrolls text',()=>evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.focus-text').scrollTop>0`));
+      check('the themed focus scrollbar arrow actually scrolls',true);
+      await evalIso(`(async()=>{await SesliOkuThemes.set(${JSON.stringify(savedSkin.theme)});await SesliOkuThemes.setMode(${JSON.stringify(savedSkin.mode)});})()`,true);await WAIT(350);
       if (process.env.FEATURE_SCREENSHOT) {
         writeFileSync('/tmp/sesli-focus.png', Buffer.from((await pageCdp.send('Page.captureScreenshot')).data, 'base64'));
         await evalIso(`__sesliOkuTest.libraryAction("focus"); __sesliOkuTest.toggleSettings(true); document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="library"]').click(); SesliOkuThemes.set('xp')`, true);
@@ -823,7 +957,7 @@ async function main() {
     await pageCdp.send("Input.dispatchMouseEvent", {
       type: "mouseWheel",
       x: 360,
-      y: 150,
+      y: Math.max(state.hostRect.bottom,state.scroller.top)+40,
       deltaX: 0,
       deltaY: 500,
       modifiers: 0,
@@ -1066,6 +1200,20 @@ async function main() {
           const luminance = color => {const numbers=color.match(/[\d.]+/g).map(Number);return numbers[0]*.2126+numbers[1]*.7152+numbers[2]*.0722;};
           check(`${theme} ${mode} paints both surfaces and form fields`, [player,popup].every(result=>result.mode===mode && result.colors.every(color=>dark?luminance(color)<110:luminance(color)>150)) ,JSON.stringify({player,popup}));
           check(`${theme} ${mode} synchronizes its accessible selection`, player.choice===mode && popup.choice===mode && player.aria.includes(dark?'Koyu':'Açık') && popup.aria.includes(dark?'Koyu':'Açık'));
+          const disclosure = expression => `(async()=>{const root=${expression};const detail=root.querySelector('.pref-profile-box');const label=detail.querySelector(':scope > summary');detail.open=false;
+            const read=()=>({display:getComputedStyle(label).display,background:getComputedStyle(label).backgroundImage,before:getComputedStyle(label,'::before').backgroundImage,mask:getComputedStyle(label,'::before').maskImage,after:getComputedStyle(label,'::after').backgroundImage,beforeTransform:getComputedStyle(label,'::before').transform,afterTransform:getComputedStyle(label,'::after').transform});
+            const closed=read();label.click();await new Promise(resolve=>setTimeout(resolve,160));const expanded=detail.open;const opened=read();label.click();return {closed,opened,expanded,collapsed:!detail.open};})()`;
+          const disclosures=[await evalIso(disclosure(`document.querySelector('#sesli-oku-host').shadowRoot`),true),await evalPopup(disclosure('document'))];
+          const disclosureValid = result => result.expanded&&result.collapsed&&(theme==='modern'?result.closed.display==='list-item':result.closed.display==='flex'&&(
+            theme==='win95'||theme==='win98'?(result.closed.before.match(/linear-gradient/g)||[]).length===2&&(result.opened.before.match(/linear-gradient/g)||[]).length===1:
+            theme==='xp'?result.closed.background!=='none'&&result.closed.after.includes('svg')&&result.opened.afterTransform!==result.closed.afterTransform:
+            result.closed.mask.includes('svg')&&result.opened.beforeTransform!==result.closed.beforeTransform));
+          check(`${theme} ${mode} disclosures use their skin and toggle in both surfaces`,disclosures.every(disclosureValid),JSON.stringify(disclosures));
+          if(process.env.DISCLOSURE_SCREENSHOT){
+            await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;r.querySelector('[data-tab="library"]').click();r.querySelector('.reading-library details').open=true;})()`);await WAIT(100);
+            writeFileSync(`/tmp/disclosure-${theme}-${mode}.png`,Buffer.from((await pageCdp.send('Page.captureScreenshot')).data,'base64'));
+            await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;r.querySelector('.reading-library details').open=false;r.querySelector('[data-tab="appearance"]').click();})()`);
+          }
           if (dark) {
             await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('#sesli-oku-colorMode-trigger').click()`);
             check(`${theme} dark dropdown uses a dark track and readable text`, await evalIso(`(() => { const root=document.querySelector('#sesli-oku-host').shadowRoot; const list=root.querySelector('#sesli-oku-colorMode-listbox');const style=getComputedStyle(list);return list.matches(':popover-open') && style.getPropertyValue('--drop-track').trim()==='#20272e' && style.color==='rgb(237, 240, 243)'; })()`));
@@ -1082,6 +1230,11 @@ async function main() {
       await popupCdp.send('Page.reload');
       await waitFor('dark mode after popup reload',()=>evalPopup(`document.body.dataset.colorMode==='dark' && document.body.dataset.theme==='xp' && document.querySelector('#colorMode')?.value==='dark'`));
       check('color mode survives reopening popup',true);
+      await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const detail=r.querySelector('.pref-profile-box');detail.open=false;detail.querySelector('summary').focus();})()`);
+      await pageCdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' '});
+      await pageCdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});
+      check('themed disclosures retain native keyboard activation',await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.pref-profile-box').open`));
+      await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.pref-profile-box').open=false`);
       const profile = await evalIso(`SesliOkuSettings.saveProfile('Renk testi')`,true);
       await evalIso(`SesliOkuThemes.setMode('light')`,true);
       await evalIso(`SesliOkuSettings.applyProfile(${JSON.stringify(profile.id)})`,true);
@@ -1243,16 +1396,21 @@ async function main() {
           wrapper.querySelector(".pref-select-trigger").click();
           const list = wrapper.querySelector(".pref-select-popup");
           const rect = list.getBoundingClientRect();
+          const opening=list.getAnimations()[0];
           const scrollbar = getComputedStyle(list, "::-webkit-scrollbar");
           const thumb = getComputedStyle(list, "::-webkit-scrollbar-thumb");
           list.scrollTop = list.scrollHeight;
-          return { open: list.matches(":popover-open"), scrollbarWidth: scrollbar.width,
+          return { motion:opening?{duration:opening.effect.getTiming().duration,easing:opening.effect.getTiming().easing,frames:opening.effect.getKeyframes()}:null, open: list.matches(":popover-open"), scrollbarWidth: scrollbar.width,
             thumb: thumb.backgroundImage !== "none" || thumb.backgroundColor !== "rgba(0, 0, 0, 0)",
             scrollable: list.scrollHeight > list.clientHeight && list.scrollTop > 0,
             inView: rect.top >= 3 && rect.bottom <= window.innerHeight - 3,
             groups: list.querySelectorAll('[role="group"]').length };
         })()`);
         check(`${theme} ${surface} opens a scrollable themed voice list`, openMenu.open && openMenu.scrollbarWidth === "17px" && openMenu.thumb && openMenu.scrollable && openMenu.inView && openMenu.groups === 1, JSON.stringify(openMenu));
+        const policy = theme==='win95' ? !openMenu.motion : theme==='modern' ?
+          openMenu.motion?.duration===120&&String(openMenu.motion.frames[0].opacity)==='0'&&!openMenu.motion.frames[0].clipPath :
+          openMenu.motion?.duration===200&&openMenu.motion.easing==='linear'&&openMenu.motion.frames[0].clipPath?.includes('100%');
+        check(`${theme} ${surface} follows its own opening policy`,policy,JSON.stringify(openMenu.motion));
         await WAIT(60);
         if (surface === "player") check(`${theme} dropdown scrolling leaves reading follow and page position intact`, (await snapshot()).follow === beforeMenu.follow && approx((await snapshot()).scrollY, beforeMenu.scrollY));
         if (process.env.SCREENSHOT_DIR) {
@@ -1272,6 +1430,31 @@ async function main() {
         }
       }
     }
+    console.log('\n  Dropdown opening motion');
+    await evalIso(`SesliOkuThemes.set('win7')`,true);await WAIT(350);
+    const dropdownProbe = `(document.querySelector('#sesli-oku-host').shadowRoot.querySelector('#sesli-oku-voice').parentElement)`;
+    for(const [height,side] of [[350,'above'],[1000,'below']]){
+      await pageCdp.send('Emulation.setDeviceMetricsOverride',{width:1000,height,deviceScaleFactor:1,mobile:false});
+      await evalIso(`__sesliOkuTest.toggleSettings(true);document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="reading"]').click();document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.preferences').scrollTop=0`);
+      await WAIT(60);
+      const reveal=await evalIso(`(()=>{const w=${dropdownProbe};w.querySelector('button').click();const l=w.querySelector('.pref-select-popup');const a=l.getAnimations()[0];return {side:l.dataset.openSide,frames:a?.effect.getKeyframes().map(frame=>frame.clipPath),duration:a?.effect.getTiming().duration,transform:getComputedStyle(l).transform};})()`);
+      check(`${side} dropdown reveals from its anchor without scaling text`,reveal.side===side&&reveal.duration===200&&reveal.frames?.[0].includes('100%')&&reveal.frames[0].startsWith('inset(100%')===(side==='above')&&reveal.transform==='none',JSON.stringify(reveal));
+      await WAIT(260);
+      check(`${side} opening removes its clipping after completion`,await evalIso(`(()=>{const l=${dropdownProbe}.querySelector('.pref-select-popup');return l.matches(':popover-open')&&l.getAnimations().length===0&&getComputedStyle(l).clipPath==='none';})()`));
+      await evalIso(`${dropdownProbe}.querySelector('button').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+    }
+    const reopened=await evalIso(`(async()=>{const w=${dropdownProbe};const trigger=w.querySelector('button');const list=w.querySelector('.pref-select-popup');trigger.click();const old=list.getAnimations()[0];trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));const canceled=old?.playState==='idle'&&!list.matches(':popover-open');trigger.click();const fresh=list.getAnimations()[0];await new Promise(resolve=>setTimeout(resolve,260));const valid=canceled&&fresh&&fresh!==old&&list.matches(':popover-open')&&list.getAnimations().length===0;trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return valid;})()`,true);
+    check('rapid close and reopen cancels the old animation safely',reopened);
+    await pageCdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await WAIT(60);
+    check('reduced motion opens dropdowns instantly',await evalIso(`(()=>{const w=${dropdownProbe};w.querySelector('button').click();const l=w.querySelector('.pref-select-popup');const valid=l.matches(':popover-open')&&l.getAnimations().length===0;w.querySelector('button').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return valid;})()`));
+    await pageCdp.send('Emulation.setEmulatedMedia',{features:[]});await WAIT(60);
+    await evalIso(`${dropdownProbe}.querySelector('button').click()`);
+    await pageCdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await WAIT(60);
+    check('enabling reduced motion completes an open dropdown without hiding it',await evalIso(`(()=>{const l=${dropdownProbe}.querySelector('.pref-select-popup');return l.matches(':popover-open')&&l.getAnimations().length===0&&getComputedStyle(l).clipPath==='none';})()`));
+    await evalIso(`${dropdownProbe}.querySelector('button').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+    await pageCdp.send('Emulation.setEmulatedMedia',{features:[]});await pageCdp.send('Emulation.clearDeviceMetricsOverride');
+    await evalIso(`SesliOkuThemes.set('modern')`,true);await WAIT(350);
+
     console.log("\n  Themed dropdown interactions");
     await evalIso(`(() => {
       const select = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice");
@@ -1644,6 +1827,7 @@ async function main() {
     await checkColorModes();
     await checkExpandedSettingsFollow();
     await checkExperienceFeatures();
+    await checkAdvancedTools();
 
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failures.length) {

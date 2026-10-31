@@ -2,7 +2,7 @@
 (() => {
   if (globalThis.SesliOkuLibrary) return;
   const worker = typeof document === "undefined";
-  const empty = () => ({ pages: {}, bookmarks: [], queue: [], queueRunning: false, queueItemId: null, queueTabId: null, export: null });
+  const empty = () => ({ pages: {}, bookmarks: [], queue: [], queueRunning: false, queueItemId: null, queueTabId: null, export: null, sites: {} });
   let data = empty();
   let loaded = false;
   let revision = 0;
@@ -10,7 +10,7 @@
   const listeners = new Set();
   function pageKey(url) {
     const parsed = new URL(url);
-    if (!["http:", "https:", "file:"].includes(parsed.protocol)) throw new Error("Bu sayfa okuma kitaplığına eklenemiyor.");
+    if (!["http:", "https:", "file:"].includes(parsed.protocol) && !(parsed.protocol === "chrome-extension:" && parsed.host === chrome.runtime.id && parsed.pathname === "/src/reader.html")) throw new Error("Bu sayfa okuma kitaplığına eklenemiyor.");
     parsed.hash = ""; return parsed.href;
   }
   function queueUrl(url) {
@@ -30,6 +30,11 @@
     result.queueItemId = value.queueItemId || null;
     result.queueTabId = Number.isInteger(value.queueTabId) ? value.queueTabId : null;
     result.export = value.export || null;
+    for (const [origin, rule] of Object.entries(value.sites || {}).slice(0,100)) {
+      try { if (new URL(origin).origin !== origin || !/^https?:/.test(origin)) continue;
+        result.sites[origin] = { settings: rule.settings || {}, theme: rule.theme || 'modern', colorMode: rule.colorMode || 'original', exclusions: Array.isArray(rule.exclusions) ? rule.exclusions.slice(0,50) : [] };
+      } catch {}
+    }
     return result;
   }
   const notify = () => { for (const listener of listeners) listener(data); };
@@ -73,6 +78,20 @@
         if (next.queue.length >= 50) throw new Error("Okuma listesine en fazla 50 yazı eklenebilir.");
         if (!next.queue.some(item => item.url === url && item.status !== "done")) next.queue.push({ id: crypto.randomUUID(), url, title: String(op.title || url).slice(0, 250), status: "pending" });
       } else if (op.type === "queueRemove") next.queue = next.queue.filter(item => item.id !== op.id);
+      else if (op.type === "itemEdit") {
+        const list = op.collection === 'queue' ? next.queue : next.bookmarks;
+        const item = list.find(entry=>entry.id===op.id); if (!item) throw new Error('Kayıt bulunamadı.');
+        item.note = String(op.note || '').slice(0,3000); item.tags = tags(op.tags);
+      } else if (op.type === 'siteSave') {
+        const origin = siteOrigin(op.url); if (!origin) throw new Error('Bu adres için site ayarı kaydedilemez.');
+        if (!next.sites[origin] && Object.keys(next.sites).length >= 100) throw new Error('En fazla 100 site kaydedilebilir.');
+        next.sites[origin] = { settings: op.settings, theme: op.theme, colorMode: op.colorMode, exclusions: next.pages[pageKey(op.url)]?.exclusions ?? next.sites[origin]?.exclusions ?? [] };
+      } else if (op.type === 'sitePatch') {
+        const rule = Object.hasOwn(next.sites,op.origin) ? next.sites[op.origin] : null; if (!rule) throw new Error('Site ayarı bulunamadı.');
+        if (op.patch.settings) rule.settings = {...rule.settings,...op.patch.settings};
+        if (op.patch.theme) rule.theme = op.patch.theme;
+        if (op.patch.colorMode) rule.colorMode = op.patch.colorMode;
+      } else if (op.type === 'siteRemove') delete next.sites[op.origin];
       else if (op.type === "queueMove") {
         const from = next.queue.findIndex(item => item.id === op.id); const to = Math.max(0, Math.min(next.queue.length - 1, from + (op.direction < 0 ? -1 : 1)));
         if (from >= 0) { const [item] = next.queue.splice(from, 1); next.queue.splice(to, 0, item); }
@@ -95,6 +114,8 @@
     });
     writes = task.catch(() => {}); return task;
   }
+  const tags = value => [...new Set((Array.isArray(value) ? value : String(value || '').split(',')).map(tag=>String(tag).trim().slice(0,40)).filter(Boolean))].slice(0,12);
+  function siteOrigin(url) { try { const parsed=new URL(url);return /^https?:$/.test(parsed.protocol) ? parsed.origin : ''; } catch { return ''; } }
   async function action(action, args = {}) {
     return rpc("LIBRARY_ACTION", { action, args });
   }
@@ -177,12 +198,13 @@
     root.innerHTML = `<div class="library-current" role="status">Sayfa bilgisi alınıyor…</div>
       <div class="library-buttons"><button type="button" class="pref-button" data-library="resume">Kaldığım yerden devam et</button><button type="button" class="pref-button" data-library="bookmark">Yer imi ekle</button><button type="button" class="pref-button" data-library="focus">Odak görünümü</button><button type="button" class="pref-button" data-library="export">MP3 indir</button><button type="button" class="pref-button" data-library="cancelExport" hidden>İndirmeyi iptal et</button></div>
       <div class="library-export" role="status"></div>
+      <label class="library-search">Kitaplıkta ara<input type="search" placeholder="Başlık, not, adres veya etiket" aria-label="Kitaplıkta ara"></label>
       <details><summary>Yer imleri</summary><ul class="library-bookmarks"></ul></details>
       <details><summary>Okuma listesi</summary><div class="library-buttons"><button type="button" class="pref-button" data-library="queueCurrent">Bu sayfayı ekle</button><button type="button" class="pref-button" data-library="queueStart">Sırayı başlat</button><button type="button" class="pref-button" data-library="queueStop">Sırayı durdur</button></div><div class="library-url"><input type="url" placeholder="https://…" aria-label="Okuma listesine eklenecek adres"><button type="button" class="pref-button" data-library="queueAdd">Adresi ekle</button></div><ul class="library-queue"></ul></details>
       <details><summary>Okunmayacak alanlar</summary><button type="button" class="pref-button" data-library="pickExclude">Sayfadan alan seç</button><ul class="library-exclusions"></ul></details>
-      <details><summary>Telaffuz sözlüğü</summary><label>Sözcük = okunuş<textarea rows="4" placeholder="OpenAI = Open ey ay\nTBMM = Türkiye Büyük Millet Meclisi" aria-label="Telaffuz sözlüğü"></textarea></label><button type="button" class="pref-button" data-library="dictionary">Sözlüğü kaydet</button></details>
+      <details><summary>Telaffuz sözlüğü</summary><label>Sözcük = okunuş<textarea rows="4" class="library-dictionary" placeholder="OpenAI = Open ey ay\nTBMM = Türkiye Büyük Millet Meclisi" aria-label="Telaffuz sözlüğü"></textarea></label><button type="button" class="pref-button" data-library="dictionary">Sözlüğü kaydet</button></details>
       <div class="library-feedback" role="status"></div>`;
-    let context = null;
+    let context = null; const drafts=new Map();
     const feedback = text => { root.querySelector(".library-feedback").textContent = text; };
     const button = (label, actionName, args = {}) => { const node = document.createElement("button"); node.type = "button"; node.className = "pref-button"; node.textContent = label; node.dataset.library = actionName; node._libraryArgs = args; return node; };
     function refresh(value) {
@@ -190,45 +212,62 @@
       const page = value.pages[key];
       root.querySelector(".library-current").textContent = page?.anchor && !page.completed ? `${context?.title || page.title} · kayıtlı konum var` : context?.title || "Bu sayfa için kayıtlı konum yok.";
       root.querySelector('[data-library="resume"]').disabled = !page?.anchor || page.completed;
+      const active=root.getRootNode().activeElement||document.activeElement;
+      if(!active?.closest('.library-item')) {
       const bookmarks = root.querySelector(".library-bookmarks"); bookmarks.replaceChildren();
-      for (const item of value.bookmarks) {
+      const query = root.querySelector('[type="search"]').value.toLocaleLowerCase('tr');
+      const matches = item => [item.title,item.url,item.note,...(item.tags||[])].join(' ').toLocaleLowerCase('tr').includes(query);
+      const editor = (item,collection,title) => {
+        const key=collection+':'+item.id;const draft=drafts.get(key)||item;
+        const details=document.createElement('details');details.className='library-item';const summary=document.createElement('summary');summary.textContent=title;
+        const note=document.createElement('textarea');note.rows=2;note.value=draft.note||'';note.setAttribute('aria-label','Kayıt notu');note.placeholder='Not ekle';
+        const labels=document.createElement('input');labels.type='text';labels.value=Array.isArray(draft.tags)?draft.tags.join(', '):(draft.tags||'');labels.placeholder='Etiketler, virgülle ayırın';labels.setAttribute('aria-label','Etiketler');
+        const save=document.createElement('button');save.type='button';save.className='pref-button';save.textContent='Not ve etiketleri kaydet';save.addEventListener('click',async()=>{try{await action('itemEdit',{collection,id:item.id,note:note.value,tags:labels.value});drafts.delete(key);feedback('Not ve etiketler kaydedildi.');}catch(error){feedback(error.message);}});
+        const remember=()=>drafts.set(key,{note:note.value,tags:labels.value});note.addEventListener('input',remember);labels.addEventListener('input',remember);
+        details.append(summary,note,labels,save);return details;
+      };
+      for (const item of value.bookmarks.filter(matches)) {
         const row = document.createElement("li"); const title = document.createElement("span"); title.textContent = `${item.title} — ${item.anchor.quote.slice(0, 80)}`;
-        row.append(title, button("Aç", "bookmarkOpen", { id: item.id }), button("Sil", "bookmarkRemove", { id: item.id })); bookmarks.appendChild(row);
+        row.append(editor(item,'bookmarks',title.textContent), button("Aç", "bookmarkOpen", { id: item.id }), button("Sil", "bookmarkRemove", { id: item.id })); bookmarks.appendChild(row);
       }
       if (!bookmarks.children.length) bookmarks.textContent = "Henüz yer imi yok.";
       const queue = root.querySelector(".library-queue"); queue.replaceChildren();
-      for (const item of value.queue) {
+      for (const item of value.queue.filter(matches)) {
         const row = document.createElement("li"); const title = document.createElement("span"); title.textContent = `${item.status === "reading" ? "▶ " : item.status === "done" ? "✓ " : item.status === "error" ? "! " : ""}${item.title}`; title.title = item.error || item.url;
-        row.append(title, button("↑", "queueMove", { id: item.id, direction: -1 }), button("↓", "queueMove", { id: item.id, direction: 1 }), button("Sil", "queueRemove", { id: item.id })); queue.appendChild(row);
+        row.append(editor(item,'queue',title.textContent), button("↑", "queueMove", { id: item.id, direction: -1 }), button("↓", "queueMove", { id: item.id, direction: 1 }), button("Sil", "queueRemove", { id: item.id })); queue.appendChild(row);
       }
       if (!queue.children.length) queue.textContent = "Okuma listesi boş.";
+      }
       root.querySelector('[data-library="queueStop"]').disabled = !value.queueRunning;
       root.querySelector('[data-library="queueStart"]').disabled = !value.queue.length;
       const exclusions = root.querySelector(".library-exclusions"); exclusions.replaceChildren();
       for (const item of page?.exclusions || []) { const row = document.createElement("li"); const text = document.createElement("span"); text.textContent = item.quote || item.selector; row.append(text, button("Kaldır", "excludeRemove", { id: item.id, url: key })); exclusions.appendChild(row); }
       if (!exclusions.children.length) exclusions.textContent = "Bu sayfada hariç tutulan alan yok.";
       const job = value.export;
-      root.querySelector(".library-export").textContent = job?.status === "working" ? `MP3 hazırlanıyor: %${job.percent}` : job?.status === "done" ? `İndirildi: ${job.filename}` : job?.status === "error" ? job.error : job?.status === "canceled" ? "İndirme iptal edildi." : "";
+      root.querySelector(".library-export").textContent = job?.status === "working" ? ` ${job.kind==='offline'?'Çevrimdışı ses':'MP3'} hazırlanıyor: %${job.percent}` : job?.status === "done" ? ` ${job.kind==='offline'?'Çevrimdışı hazır':'İndirildi'}: ${job.filename}` : job?.status === "error" ? job.error : job?.status === "canceled" ? "İndirme iptal edildi." : "";
       root.querySelector('[data-library="export"]').disabled = job?.status === "working";
       root.querySelector('[data-library="cancelExport"]').hidden = job?.status !== "working";
     }
+    root.querySelector('[type="search"]').addEventListener('input',()=>refresh(data));
+    root.addEventListener('focusout',()=>setTimeout(()=>refresh(data),0));
     const unsubscribe = subscribe(refresh);
-    action("context").then(result => { context = result.context; refresh(data); }).catch(error => feedback(error.message));
+    action("context").then(result => { context = result.context; refresh(data);root.dispatchEvent(new Event('library-context')); }).catch(error => feedback(error.message));
     const unsubscribeSettings = globalThis.SesliOkuSettings.subscribe(settings => {
-      if (document.activeElement !== root.querySelector("textarea") && root.getRootNode().activeElement !== root.querySelector("textarea")) root.querySelector("textarea").value = (settings.pronunciationRules || []).map(rule => `${rule.from} = ${rule.to}`).join("\n");
+      if (document.activeElement !== root.querySelector(".library-dictionary") && root.getRootNode().activeElement !== root.querySelector(".library-dictionary")) root.querySelector(".library-dictionary").value = (settings.pronunciationRules || []).map(rule => `${rule.from} = ${rule.to}`).join("\n");
     });
     root.addEventListener("click", async event => {
       const target = event.target.closest("[data-library]"); if (!target || target.disabled) return;
       let name = target.dataset.library; const args = { ...(target._libraryArgs || {}) };
       try {
-        if (name === "dictionary") { await globalThis.SesliOkuSettings.update({ pronunciationRules: dictionary(root.querySelector("textarea").value) }); feedback("Telaffuz sözlüğü kaydedildi."); return; }
+        if (name === "dictionary") { await globalThis.SesliOkuSettings.update({ pronunciationRules: dictionary(root.querySelector(".library-dictionary").value) }); feedback("Telaffuz sözlüğü kaydedildi."); return; }
         if (name === "queueAdd") { args.url = root.querySelector('input[type="url"]').value; name = "queueAddUrl"; }
         if (name === "queueCurrent") { args.url = context?.url; args.title = context?.title; name = "queueAddUrl"; }
         const result = await action(name, args); feedback(result.message || "İşlem tamamlandı.");
         if (name === "pickExclude" && location.protocol === "chrome-extension:") window.close();
       } catch (error) { feedback(error.message); }
     });
-    return { dispose() { unsubscribe(); unsubscribeSettings(); } };
+    const toolsUi = globalThis.SesliOkuTools?.mount(root, { action, feedback, button, context: () => context, refresh });
+    return { dispose() { unsubscribe(); unsubscribeSettings(); toolsUi?.dispose(); } };
   }
   const css = `
     @layer base, themes, preferences, experience;
@@ -237,6 +276,8 @@
       .reading-library { grid-column: 1 / -1; min-width: 0; font-size: 11px; }
       .library-current, .library-export, .library-feedback { margin-bottom: 7px; }
       .library-buttons, .library-url { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
+      .library-item { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+      .reading-library input:is([type="search"],[type="text"]) { box-sizing: border-box; min-width: 0; width: 100%; padding: 5px; font: inherit; color: inherit; background: var(--panel, #242a24); border: 1px solid var(--border, #56604a); user-select: text; -webkit-user-select: text; }
       .reading-library details { margin-top: 10px; }
       .reading-library summary { cursor: pointer; }
       .reading-library ul { margin: 7px 0; padding: 0; list-style: none; }
@@ -253,12 +294,15 @@
       .playback-strip button { display: grid; place-items: center; box-sizing: border-box; width: auto; height: 25px; min-height: 25px; padding: 0 7px; flex: none; font-size: 11px; border-radius: var(--theme-radius, 5px); background: var(--theme-button, #ffffff12); }
       .playback-strip input { flex: 1; min-width: 30px; width: 100%; }
       .playback-strip output { flex: none; font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .repeat-controls { padding: 0 12px 6px; font-size: 11px; }
+      .repeat-controls button { width: auto; height: auto; min-height: 25px; padding: 4px 8px; font: inherit; }
+      .backup-file { max-width: 170px; }
       .focus-reader { margin: 0 6px 8px; border: 1px solid var(--border, #56604a); background: var(--panel, #242a24); color: var(--text, #f7f7f5); }
       .focus-reader[hidden], .playback-strip [hidden] { display: none; }
       .focus-heading { display: flex; align-items: center; gap: 12px; padding: 10px 16px; font: inherit; border-bottom: 1px solid var(--border, #56604a); }
       .focus-heading h2 { flex: 1; min-width: 0; font: inherit; font-weight: 700; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
       .focus-heading button { width: auto; height: 25px; min-height: 25px; padding: 0 8px; font-size: 11px; }
-      .focus-text { position: relative; max-height: 52vh; overflow-y: auto; padding: 20px max(18px, calc((100% - 760px) / 2)); font-family: Georgia, serif; font-size: var(--focus-font-size, 22px); line-height: 1.8; }
+      .focus-text { position: relative; max-height: 52vh; overflow-y: auto; padding: var(--focus-padding, 20px) max(var(--focus-padding, 18px), calc((100% - var(--focus-width, 760px)) / 2)); font-family: var(--focus-font, Georgia, serif); font-size: var(--focus-font-size, 22px); line-height: var(--focus-line-height, 1.8); }
       .focus-text p { margin: 0 0 18px; padding: 8px 12px; border-left: 3px solid transparent; cursor: pointer; }
       .focus-text p.active { border-left-color: var(--focus-word-bg, #d9f27a); }
       .focus-text mark { background: var(--focus-word-bg, #d9f27a); color: var(--focus-word-text, #111); }
@@ -269,5 +313,5 @@
     }
   `;
   globalThis.SesliOkuLibrary = Object.freeze({ ready, pageKey, queueUrl, mutate, css, action, subscribe, dictionary, pronounce, mapBoundaries, detectLanguage, stripMp3Tags, mount,
-    current: () => data, isReady: () => loaded });
+    clean, tags, siteOrigin, current: () => data, isReady: () => loaded });
 })();

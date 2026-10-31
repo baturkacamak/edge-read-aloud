@@ -71,6 +71,7 @@
     blockedResult: null,
     blockedIndex: -1,
     cache: new Map(),
+    replayCache: new Map(), replayChunks: null,
     highlighted: null,
     host: null,
     ui: null,
@@ -190,6 +191,7 @@
   }
 
   function collectBlocks() {
+    if(globalThis.SesliOkuDocument?.book?.kind==='audio')return [...document.querySelectorAll('[data-book-part]')].map(el=>({el,map:buildTextMap(el),text:cleanText(el.textContent)}));
     const preferred = document.querySelector("article, main, [role='main']");
     const scope = preferred && cleanText(preferred.innerText).length > 400
       ? preferred
@@ -267,7 +269,7 @@
     for (const block of blocks) {
       const map = block.map || buildTextMap(block.el);
       let cursor = 0;
-      for (const part of splitText(block.text)) {
+      for (const part of globalThis.SesliOkuDocument?.book?.kind==='audio' ? [block.text] : splitText(block.text)) {
         if (part.length < 2) continue;
         let offset = block.text.indexOf(part, cursor);
         if (offset < 0) offset = cursor;
@@ -322,6 +324,7 @@
   }
 
   async function requestAudio(text, chunk = null, override = state.settings) {
+    if(globalThis.SesliOkuDocument?.book?.kind==='audio')return globalThis.SesliOkuDocument.audioFor(text,chunk);
     const settings = await speechSettings(text, chunk, override);
     const spoken = library.pronounce(text, settings.pronunciationRules);
     if (TEST_MODE && state.testAudio) {
@@ -345,14 +348,18 @@
 
   function audioFor(index) {
     if (state.cache.has(index)) return state.cache.get(index);
+    if(state.replayChunks!==state.chunks){state.replayCache.clear();state.replayChunks=state.chunks;}
+    if(state.replayCache.has(index))return state.replayCache.get(index);
     const promise = requestAudio(state.chunks[index].text, state.chunks[index]);
-    state.cache.set(index, promise);
+    state.cache.set(index, promise);state.replayCache.set(index,promise);
+    if(state.replayCache.size>4)state.replayCache.delete(state.replayCache.keys().next().value);
+    promise.catch(()=>{if(state.replayCache.get(index)===promise)state.replayCache.delete(index);});
     return promise;
   }
 
   function prefetch(index) {
     if (index >= state.chunks.length || state.cache.has(index)) return;
-    const promise = requestAudio(state.chunks[index].text, state.chunks[index]);
+    const promise = audioFor(index);
     state.cache.set(index, promise);
     promise.catch(() => { if (state.cache.get(index) === promise) state.cache.delete(index); });
   }
@@ -451,12 +458,13 @@
       renderVoices([]);
     } finally {
       state.voicesLoading = false;
-      if (state.ui) state.ui.voice.disabled = false;
+      if (state.ui) { state.ui.voice.disabled = globalThis.SesliOkuDocument?.book?.kind==='audio';state.ui.preferences.sync(state.settings); }
     }
   }
 
   function syncSettingsInputs() {
-    state.ui?.preferences.sync(state.settings);
+    if(!state.ui)return;
+    state.ui.preferences.sync(state.settings);
   }
 
   function applyReadingSettings(patch) {
@@ -477,7 +485,7 @@
     experience.invalidate();
     const speechChanged = ["voice", "rate", "pitch", "volume", "autoVoice", "turkishVoice", "englishVoice", "pronunciationRules"].some(key => JSON.stringify(previous[key]) !== JSON.stringify(next[key]));
     if (speechChanged) {
-      state.cache.clear();
+      state.cache.clear();state.replayCache.clear();
       if (state.playing) {
         const wasPaused = state.paused;
         const follow = state.followReading;
@@ -1780,6 +1788,7 @@
         if (session !== state.session || !state.playing || checkSleepDeadline()) return;
         experience.updateProgress();
         experience.save();
+        if (experience.loopTick(audio,result)) return;
         if (!boundaries.length) return;
         const ticks = audio.currentTime * 1e7;
         if (boundaries[boundaryIndex]?.offset > ticks) boundaryIndex = 0;
@@ -1918,6 +1927,8 @@
           (!state.sleepTimer.endElement || state.sleepTimer.endElement === chunk.el)) {
         stop(); setStatus("Paragraf tamamlandı"); return;
       }
+      const repeated=experience.nextRepeat(index);
+      if(repeated){startSession(repeated.index,{anchor:repeated});return;}
       state.index++;
       if (paragraphEnd && state.index < state.chunks.length) await waitParagraphGap(session);
     }
@@ -1964,6 +1975,7 @@
 
     clearWordHighlight();
     showUi();
+    syncSettingsInputs();
     updateUi();
     run(session).catch((error) => {
       console.warn("[Sesli Oku] playback loop failed:", error);
@@ -1996,6 +2008,7 @@
 
   function skip(direction) {
     if (!state.chunks.length) return;
+    experience.clearRepeat();
     const next = Math.min(
       state.chunks.length - 1,
       Math.max(0, state.index + direction)
@@ -2023,7 +2036,7 @@
     state.lastManualScrollAt = 0;
     state.index = 0;
     state.chunks = [];
-    state.cache.clear();
+    state.cache.clear();state.replayCache.clear();
     state.blockedResult = null;
     state.blockedIndex = -1;
     clearHighlight();
@@ -2170,7 +2183,7 @@
   }
 
   function startFromCursor(settings, fromPoint = false) {
-    state.settings = normalizeSettings({ ...preferences.current(), ...settings });
+    state.settings = preferences.forPage({ ...preferences.current(), ...settings },location.href);
     const target = resolveCaretTarget(fromPoint);
     if (!target) {
       showUi();
@@ -2257,7 +2270,7 @@
 
   function startPage(settings, options = {}) {
     state.queueItemId = options.queueItemId || null;
-    state.settings = normalizeSettings({ ...preferences.current(), ...settings });
+    state.settings = preferences.forPage({ ...preferences.current(), ...settings },location.href);
     const blocks = collectBlocks();
     const chunks = buildChunks(blocks);
     if (!chunks.length) {
@@ -2275,7 +2288,7 @@
 
   function startSelection(settings, providedText) {
     state.queueItemId = null;
-    state.settings = normalizeSettings({ ...preferences.current(), ...settings });
+    state.settings = preferences.forPage({ ...preferences.current(), ...settings },location.href);
 
     const selection = window.getSelection();
     const hasRange =
@@ -2441,6 +2454,7 @@
     if (!target) { chunks = buildChunks(collectBlocks()); target = locate(chunks); }
     if (!target) return;
     state.chunks = chunks;
+    experience.clearRepeat();
     startSession(target.index, { anchor: { charOffset: target.charOffset, seconds: 0 } });
   });
 
@@ -2462,6 +2476,7 @@
 
 
   experience.initialize();
+  preferences.setContext(location.href);
   preferences.subscribe(receiveSettings);
   library.ready.then(() => sendToBackground({ type: "CONTENT_READY" })).catch(() => {});
   setInterval(() => {
@@ -2483,7 +2498,7 @@
         state.testRequests = []; state.testPlayed = [];
       },
       startBlocks: (selectors, settings = {}) => {
-        state.settings = normalizeSettings({ ...preferences.current(), ...settings });
+        state.settings = preferences.forPage({ ...preferences.current(), ...settings },location.href);
         state.chunks = buildChunks(selectors.map(selector => {
           const el = document.querySelector(selector);
           return { el, text: cleanText(el.innerText) };
@@ -2648,13 +2663,13 @@
     }
 
     if (message.type === "LIBRARY_ACTION") {
-      library.ready.then(() => experience.perform(message.action, message.args, requestAudio)).then(
+      Promise.all([library.ready,globalThis.SesliOkuDocument?.ready]).then(() => experience.perform(message.action, message.args, requestAudio)).then(
         value => sendResponse({ ok: true, ...value }), error => sendResponse({ ok: false, error: error.message })
       );
       return true;
     }
-    if (["START_PAGE", "START_SELECTION", "START_FROM_CURSOR"].includes(message.type) && !library.isReady()) {
-      library.ready.then(() => {
+    if (["START_PAGE", "START_SELECTION", "START_FROM_CURSOR"].includes(message.type) && (!library.isReady() || (globalThis.SesliOkuDocument && document.documentElement.dataset.bookReady!=="true"))) {
+      Promise.all([library.ready,globalThis.SesliOkuDocument?.ready]).then(() => {
         if (message.type === "START_PAGE") return startPage(message.settings, { queueItemId: message.queueItemId });
         if (message.type === "START_SELECTION") return startSelection(message.settings, message.text);
         return startFromCursor(message.settings, message.fromPoint === true);

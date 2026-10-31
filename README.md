@@ -209,6 +209,54 @@ Konumlar (son 100 adres), yer imleri (300), liste (50 yazı), hariç tutma
 kuralları ve telaffuz sözlüğü yalnızca tarayıcı profilinde saklanır. Ses
 indirmeleri tarayıcının normal indirme ayarlarını kullanır.
 
+### Site ayarları, çalışma araçları ve belgeler
+
+- **Siteye özel ayarlar:** Kitaplık → Siteye özel ayarlar → Bu sitenin mevcut
+  ayarlarını kaydet. Ses, hız, tema, renk modu, odak tercihleri ve mevcut
+  hariç tutma kuralları aynı site adresinde otomatik uygulanır. Özel ayarlar
+  etkinken panelde yaptığınız değişiklikler o siteye yazılır; diğer sitelerin
+  genel ayarları değişmez. Genel ayarlara dön ile kural kaldırılır. Eşleşme
+  protokol + alan adı + port üzerinden yapılır; alt alan adları ayrı sayılır.
+- **Notlar ve etiketler:** Yer imini veya liste öğesini açıp not ve virgülle
+  ayrılmış etiketler ekleyin, ardından kaydedin. Kitaplık araması başlık,
+  adres, not ve etiketlerde arar. Notlar 3000 karakter, etiketler kayıt başına
+  12 adetle sınırlıdır.
+- **Tekrar / A–B döngüsü:** Oynatıcının altındaki Tekrar menüsü mevcut cümle
+  veya paragrafın başına döner; cümle/paragraf döngüsü de kurulabilir. A ve B
+  noktalarını ses oynarken veya duraklatıp zaman çizgisinde ilerleyerek
+  işaretleyin; ardından A–B döngüsünü açın. Döngüyü kapat normal akışa döner.
+  Döngüler oturuma aittir; uyku zamanlayıcısı çalışmaya devam eder.
+- **Gelişmiş odak:** Görünüm sekmesinden serif/sans serif/eş aralıklı yazı
+  tipi, satır aralığı (1.2–2.6), metin genişliği (400–1200 px) ve kenar boşluğu
+  (8–60 px) seçilir. Aynı tercihler belge okuyucusunda da kullanılır.
+- **Çevrimdışı kitaplık:** Kitaplık → Belgeler ve çevrimdışı kitaplık → Bu
+  okumayı çevrimdışı sakla. Mevcut okuma metni, sesi ve kelime zamanları
+  hazırlanır; kayıt tamamlanınca Aç ile internet olmadan dinlenebilir.
+  Hazırlama internet gerektirir. Kayıttaki ses, perde ve telaffuz sabittir;
+  dinlerken oynatma hızı ve görünüm değiştirilebilir. İptal/sekme kapatma
+  yarım ses parçalarını temizler. Yerel belge ve sesler için toplam 250 MB
+  sınırı vardır; kayıtlar Kitaplıktaki Sil düğmesiyle kaldırılır.
+- **Yedekleme:** Kitaplık → Yedekleme / geri yükleme → Yedeği indir JSON
+  üretir. Yedeği birleştir geçerli bir yedeği mevcut kayıtlarla birleştirir
+  ve yedekteki ayarları uygular. Profiller, sözlük, konumlar, notlar,
+  etiketler ve site kuralları dahildir. Çalışan kuyruk ve zamanlayıcı
+  aktarılmaz. Ses ve belge dosyaları JSON yedeğine dahil değildir; belge
+  yer imleri için özgün dosyayı yeni tarayıcıda yeniden açmak gerekir.
+- **PDF / EPUB:** Kitaplık → Belgeler ve çevrimdışı kitaplık → PDF / EPUB aç
+  ayrı belge okuyucusunu açar. Dosya bu cihazda metne dönüştürülür; sayfa veya
+  bölüm seçicisiyle gezinilebilir. EPUB kitap sırasını, PDF metin katmanını
+  kullanır. Orijinal sayfa tasarımı yerine sade metin gösterilir. Sesli oku,
+  kaldığın yerden devam, kelimeye tıklayarak başlatma ve yer imleri çalışır.
+  Dosya başına en fazla 50 MB, PDF için 1000 sayfa/5 milyon karakter ve EPUB
+  için 20 MB çıkarılmış metin/5000 bölüm sınırı vardır. Taranmış PDF için OCR
+  ve DRM korumalı EPUB desteği yoktur. Parolalı PDF parolası bellekte kullanılır,
+  kaydedilmez. Belge metni yerelde saklanır; yalnızca seslendirme veya ses
+  hazırlama seçilince metin Microsoft servisine gönderilir.
+
+PDF.js ve fflate, lisanslarıyla birlikte `src/vendor` içinde paketlenmiştir.
+Çalışma sırasında CDN kullanılmaz. Geliştirmede `npm ci` ardından
+`npm run vendor:readers` bu dosyaları sabitlenmiş sürümlerden yeniden üretir.
+
 ### Görünüm temaları
 
 Popup'taki veya üst çubuğun ⚙ ayarlarındaki **Görünüm · Tema** menüsünden
@@ -219,6 +267,13 @@ okumayı yeniden başlatmaz; duraklatma, paragraf ve takip konumu korunur.
 Tema geçişlerinde eski ve yeni görünüm 320 ms içinde yumuşakça birbirine
 geçer; çubuğun yüksekliği ve sayfada ayrılan alan birlikte hareket eder.
 Sistemde **hareketi azalt** tercihi açıksa geçişler anında uygulanır.
+Açılır seçim listeleri için her temanın ayrı davranışı vardır: Windows 95
+anında açılır; Windows 98, XP ve 7 efektler açık senaryosundaki kayarak açılmayı
+kullanır. Modern kısa bir saydamlık/konum geçişi kullanır. Eski Windows
+kaynakları XP ve 7 için de aynı slide-open efektini tarif ettiğinden bu ikisine
+farklı efektler uydurulmamıştır. Animasyon süreleri uygulama tercihidir;
+özgün sistemlerden ölçülmüş değerler değildir. Hareketi azalt tercihi tüm liste
+animasyonlarını kapatır. [Kaynaklar ve uyarlama notları](docs/dropdown-motion.md).
 
 **Görünüm → Açık / koyu görünüm** alanında **Özgün görünüm**, **Açık** ve
 **Koyu** seçenekleri vardır. Özgün görünüm Windows temalarının mevcut açık
@@ -239,6 +294,11 @@ komut düğmeleri içerir. Her ikisinde de kontroller başlığın altına yerle
 popup aynı dönemin pencere ve form ölçülerini kullanır. Windows 95/98
 temalarında tam genişlikte klasik başlık,
 kompakt araç çubuğu ve 98.css projesinden alınan piksel yazı tipleri kullanılır.
+
+Katlanır bölümler de temaya uyarlanır: Windows 95/98'de kabartmalı +/− kutuları,
+XP'de mavi başlık ve sağda çift ok, Windows 7'de ince dönen üçgen bulunur.
+Açık/koyu paletleri, odak çerçevesi ve klavyeyle açma/kapama korunur. Modern
+mevcut açılır bölüm görünümünü kullanır.
 Stiller ve yazı tipleri uzantıyla birlikte gelir; uzaktan CSS veya font indirilmez.
 Açılır seçim listeleri ve scrollbarları da seçili temayı kullanır. Sesler dil
 gruplarıyla gösterilir; ok tuşları, Home/End, Page Up/Down ve yazarak arama
@@ -420,6 +480,10 @@ Testler şunları doğrular:
   dar ekrana sığması ve tema değişiminin okuma durumunu koruması
 - Açık/koyu paletlerin beş temada iki arayüze uygulanması, erişilebilir seçim
   eşzamanlaması, profil ve yeniden açılışta korunması, yumuşak geçişler
+- Site ayarlarının diğer sitelere taşmaması, not/etiket araması, yedek
+  doğrulama ve geri yükleme; tekrar sesi önbelleği ve A–B döngüsü
+- Bağlantı kapalıyken hazır sesin sentez isteği olmadan oynatılması, iptalde
+  yarım kayıtların temizlenmesi, gerçek PDF/EPUB ayrıştırma ve bölüm sırası
 - Konum/yer imi, zaman çizgisiyle paragraflar arası gezinme, telaffuz ve özgün
   kelime eşlemesi, otomatik Türkçe/İngilizce ses, odak görünümü ve alan hariç tutma
 - Üç ses parçasının tek MP3 olarak indirilmesi ve tarayıcıda çözümlenmesi,
@@ -440,6 +504,9 @@ edge-read-aloud/
 │   ├── background.js
 │   ├── content.js
 │   ├── content.css
+│   ├── reader.html / reader.js / reader.css
+│   ├── vault.js
+│   ├── tools.js
 │   ├── experience.js
 │   ├── library.js
 │   ├── drm.js
