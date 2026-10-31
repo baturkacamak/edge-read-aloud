@@ -15,7 +15,7 @@
 
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { readFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -120,7 +120,10 @@ async function findDevToolsPort(profile) {
 async function main() {
   const fixture = await readFile(path.join(ROOT, "tests", "fixture.html"));
   const server = createServer((req, res) => {
-    if (req.url?.startsWith("/fixture.html")) {
+    if (req.url?.startsWith("/queue.html")) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(req.url.includes('empty=1') ? '<html><body></body></html>' : '<html lang="tr"><title>Sıra testi</title><body><article><p>Bu sıradaki yazının okunacak paragrafıdır ve ses tamamlanınca bir sonraki sayfaya geçilmelidir.</p></article></body></html>');
+    } else if (req.url?.startsWith("/fixture.html")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(fixture);
     } else {
@@ -215,8 +218,274 @@ async function main() {
     await waitFor("content test hook", async () =>
       evalIso("typeof window.__sesliOkuTest === 'object'")
     );
+    await evalIso("__sesliOkuTest.syntheticAudio(150)");
 
     const snapshot = () => evalIso("JSON.stringify(__sesliOkuTest.snapshot())").then(JSON.parse);
+
+    async function checkClickReading() {
+      console.log('\n  Click to continue reading');
+      await pageCdp.send('Emulation.setDeviceMetricsOverride',{width:1200,height:800,deviceScaleFactor:1,mobile:false});
+      await evalIso(`__sesliOkuTest.stop(); SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:false})`,true);
+      await evalIso(`window.scrollTo(0,0);__sesliOkuTest.syntheticAudio(30000);__sesliOkuTest.startBlocks(['#p1','#p2','#p3'])`);
+      await waitFor('initial audio before clicking',()=>evalIso(`__sesliOkuTest.snapshot().wordText==='Birinci'`));
+      const wordPoint = async (selector,word,scroll=true) => {
+        const point = await evalIso(`(() => {const p=document.querySelector(${JSON.stringify(selector)});${scroll?'p.scrollIntoView({block:"center",behavior:"instant"});':''} const walker=document.createTreeWalker(p,NodeFilter.SHOW_TEXT);let n;while(n=walker.nextNode()){const at=n.data.indexOf(${JSON.stringify(word)});if(at<0)continue;const r=document.createRange();r.setStart(n,at+2);r.setEnd(n,at+3);const box=r.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2};}})()`);
+        if(!point)throw new Error(`No glyph for ${word}`);return point;
+      };
+      const mouse = (type,point,extra={})=>pageCdp.send('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',clickCount:1,...extra});
+      const clickAt = async point => {await mouse('mousePressed',point);await mouse('mouseReleased',point);};
+      await clickAt(await wordPoint('#p2','buradan'));
+      await waitFor('clicked word in another paragraph',()=>evalIso(`__sesliOkuTest.snapshot().wordText==='buradan'`));
+      check('clicking another paragraph starts at the clicked word', (await snapshot()).index===1 && !(await snapshot()).paused);
+      await evalIso('__sesliOkuTest.pause()');
+      await clickAt(await wordPoint('#p1','kaydırma'));
+      await waitFor('clicked word resumes paused reading',()=>evalIso(`__sesliOkuTest.snapshot().wordText==='kaydırma' && !__sesliOkuTest.snapshot().paused`));
+      check('a text click resumes paused reading at an earlier word', (await snapshot()).index===0);
+      await evalIso(`__sesliOkuTest.pause();__sesliOkuTest.toggleSettings(true)`);
+      await WAIT(100);
+      const point = await wordPoint('#p2','Okuma');
+      await clickAt(point);
+      await waitFor('click with settings expanded',()=>evalIso(`__sesliOkuTest.snapshot().wordText==='Okuma' && !__sesliOkuTest.snapshot().paused`));
+      check('closing settings on mousedown preserves the original clicked word',await evalIso(`!document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.settings').classList.contains('open')`));
+      await evalIso('__sesliOkuTest.pause()');
+      const before = (await snapshot()).session;
+      await evalIso(`(() => {const p=document.querySelector('#p2');for(const [tag,id] of [['button','click-button'],['a','click-link'],['span','click-edit'],['span','click-excluded']]){const node=document.createElement(tag);node.id=id;node.textContent='deneme kontrol metni';if(tag==='a')node.href='#click-test';if(id==='click-edit')node.contentEditable='true';if(id==='click-excluded')node.setAttribute('data-sesli-oku-excluded','');p.append(node);}})()`);
+      for(const selector of ['#click-button','#click-link','#click-edit','#click-excluded'])await clickAt(await wordPoint(selector,'deneme'));
+      check('links, buttons, editable and excluded content keep their own actions', (await snapshot()).session===before && (await snapshot()).paused);
+      await evalIso(`for(const id of ['click-button','click-link','click-edit','click-excluded'])document.getElementById(id).remove();window.getSelection().removeAllRanges()`);
+      const dragStart=await wordPoint('#p1','metin');const dragEnd=await wordPoint('#p1','kelime',false);
+      await mouse('mouseMoved',dragStart,{button:'none'});await mouse('mousePressed',dragStart);await WAIT(80);await mouse('mouseMoved',dragEnd,{buttons:1});await WAIT(80);await mouse('mouseReleased',dragEnd);
+      check('dragging to select text does not jump playback', (await snapshot()).session===before && (await snapshot()).paused);
+      await evalIso(`document.addEventListener('mouseup',()=>{const node=document.querySelector('#p1').firstChild;const range=document.createRange();range.setStart(node,0);range.setEnd(node,7);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);},{once:true})`);
+      await clickAt(await wordPoint('#p1','metin'));
+      check('a click that selects text preserves the reading position', (await snapshot()).session===before && await evalIso(`window.getSelection().toString()==='Birinci'`));
+      await evalIso('window.getSelection().removeAllRanges()');
+      const blank=await evalIso(`(() => {const r=document.querySelector('#p1').getBoundingClientRect();return {x:r.right-2,y:r.bottom+10};})()`);
+      await clickAt(blank);
+      check('clicking paragraph spacing does not jump playback', (await snapshot()).session===before);
+      await evalIso(`document.querySelector('#p2').addEventListener('click',event=>event.preventDefault(),{once:true})`);
+      await clickAt(await wordPoint('#p2','buradan'));
+      check('page controls can cancel their click without restarting speech', (await snapshot()).session===before);
+      await evalIso('__sesliOkuTest.stop()');
+      const stopped = (await snapshot()).session;
+      await clickAt(await wordPoint('#p1','metin'));
+      check('clicking text after stopping does not start an unsolicited reading', (await snapshot()).session===stopped && !(await snapshot()).playing);
+      await evalIso('SesliOkuSettings.update(SesliOkuSettings.defaults)',true);
+    }
+    if (process.env.CLICKS_ONLY) {
+      await checkClickReading();console.log(`\n${passed} passed, ${failed} failed`);if(failed)process.exitCode=1;return;
+    }
+
+    async function checkExperienceFeatures() {
+      console.log("\n  Reading library and playback tools");
+      await evalIso(`__sesliOkuTest.stop(); SesliOkuSettings.update({ ...SesliOkuSettings.defaults, autoFollow: false })`, true);
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
+      await evalIso(`__sesliOkuTest.syntheticAudio(20000); __sesliOkuTest.startBlocks(["#p1", "#p2", "#p3"])`);
+      await waitFor("playback timeline metadata", () => evalIso(`__sesliOkuTest.experience().total > 20`));
+      await evalIso(`__sesliOkuTest.pause(); __sesliOkuTest.seekBy(10)`);
+      let timeline = await evalIso(`__sesliOkuTest.experience()`);
+      check("+10 seconds seeks in the current audio", timeline.local > 9.9 && timeline.local < 11);
+      await evalIso(`__sesliOkuTest.seekBy(-10)`);
+      check("-10 seconds seeks backwards", (await evalIso(`__sesliOkuTest.experience()`)).local < 1);
+      await evalIso(`__sesliOkuTest.seekTo(22)`);
+      check("seeking across paragraphs preserves pause", (await snapshot()).index === 1 && (await snapshot()).paused);
+      await evalIso(`__sesliOkuTest.playback()`);
+      await waitFor("seek reaches next audio", () => evalIso(`__sesliOkuTest.experience().local >= 1.9`));
+      await evalIso(`__sesliOkuTest.pause(); __sesliOkuTest.savePosition()`);
+      await waitFor("saved position", () => evalIso(`SesliOkuLibrary.current().pages[SesliOkuLibrary.pageKey(location.href)]?.anchor.seconds >= 1.9`));
+      await evalIso(`__sesliOkuTest.libraryAction("bookmark")`, true);
+      const position = await evalIso(`SesliOkuLibrary.current().pages[SesliOkuLibrary.pageKey(location.href)].anchor`);
+      check("bookmark stores source text and audio position", await evalIso(`SesliOkuLibrary.current().bookmarks.some(item => item.anchor.quote === ${JSON.stringify(position.quote)} && item.anchor.seconds >= 1.9)`));
+      await evalIso(`__sesliOkuTest.stop(); __sesliOkuTest.libraryAction("resume")`, true);
+      await waitFor("saved position resumes", () => evalIso(`__sesliOkuTest.experience().local >= 1.9`));
+      await evalIso(`__sesliOkuTest.pause()`);
+      check("resume finds the saved paragraph in a fresh extraction", (await snapshot()).index > 0 && await evalIso(`document.querySelector('.edge-ra-current')?.textContent.startsWith(${JSON.stringify(position.quote)})`));
+      await evalIso(`__sesliOkuTest.libraryAction("focus")`, true);
+      check("focus view presents readable source paragraphs", await evalIso(`(() => { const r = document.querySelector('#sesli-oku-host').shadowRoot; return !r.querySelector('.focus-reader').hidden && r.querySelectorAll('.focus-text p').length > 2 && r.querySelector('.focus-text p.active'); })()`));
+      await evalIso(`SesliOkuSettings.update({ focusFontSize: 28, focusBackground: "paper" })`, true);
+      check("focus font and paper background update live", await evalIso(`(() => { const r = document.querySelector('#sesli-oku-host').shadowRoot; return getComputedStyle(r.querySelector('.focus-text')).fontSize === '28px' && r.querySelector('.focus-reader').dataset.background === 'paper'; })()`));
+      if (process.env.FEATURE_SCREENSHOT) {
+        writeFileSync('/tmp/sesli-focus.png', Buffer.from((await pageCdp.send('Page.captureScreenshot')).data, 'base64'));
+        await evalIso(`__sesliOkuTest.libraryAction("focus"); __sesliOkuTest.toggleSettings(true); document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="library"]').click(); SesliOkuThemes.set('xp')`, true);
+        await WAIT(400);
+        writeFileSync('/tmp/sesli-library.png', Buffer.from((await pageCdp.send('Page.captureScreenshot')).data, 'base64'));
+      }
+      await evalIso(`if (__sesliOkuTest.experience().focus) __sesliOkuTest.libraryAction("focus"); __sesliOkuTest.stop()`, true);
+      const mapping = await evalIso(`(() => { const s = SesliOkuLibrary.pronounce('API ile APIler ve CPU.', [{ from:'API',to:'ey pi ay' }, { from:'CPU',to:'si pi yu' }]); return { text:s.text, ranges: SesliOkuLibrary.mapBoundaries(s, [{text:'ey'},{text:'pi'},{text:'ay'},{text:'ile'},{text:'APIler'},{text:'ve'},{text:'si'},{text:'pi'},{text:'yu'}]) }; })()`);
+      check("pronunciation changes whole words and maps spoken words to original text", mapping.text === 'ey pi ay ile APIler ve si pi yu.' && mapping.ranges.slice(0,3).every(range => range.start === 0 && range.end === 3) && mapping.ranges[6].start === 18);
+      await evalIso(`(() => { const a=document.createElement('p');a.id='feature-tr';a.lang='tr';a.textContent='API ile bu yazıyı ve yeni özellikleri sesli olarak okuyabilirsiniz.'; const b=document.createElement('p');b.id='feature-en';b.lang='en';b.textContent='The article is in English and this is the text for the new reading tools.'; (document.querySelector('#reader') || document.body).append(a,b); })()`);
+      await evalIso(`SesliOkuSettings.update({ autoVoice: true, pronunciationRules: [{ from: "API", to: "ey pi ay" }] })`, true);
+      await evalIso(`__sesliOkuTest.syntheticAudio(20000); __sesliOkuTest.startBlocks(['#feature-tr','#feature-en'])`);
+      await waitFor("automatic voices and source highlight", () => evalIso(`__sesliOkuTest.snapshot().testRequests.length >= 2 && __sesliOkuTest.snapshot().wordText === "API"`));
+      await evalIso(`__sesliOkuTest.pause()`);
+      const requests = (await snapshot()).testRequests;
+      check("automatic voice selects Turkish and English per paragraph", requests[0].settings.voice.startsWith('tr-TR-') && requests[1].settings.voice.startsWith('en-US-'));
+      check("dictionary is applied before audio synthesis", requests[0].text.startsWith('ey pi ay ile'));
+      check("pronunciation keeps source word highlighting aligned", (await snapshot()).wordText === 'API', JSON.stringify({ word: (await snapshot()).wordText, index: (await snapshot()).index, requests: (await snapshot()).testRequests.length }));
+      await evalIso(`__sesliOkuTest.stop(); SesliOkuSettings.update({ autoVoice:false, pronunciationRules:[] })`, true);
+      await evalIso(`__sesliOkuTest.syntheticAudio(20000); __sesliOkuTest.startBlocks(['#p1','#p2'])`);
+      await waitFor('reading before excluding a future paragraph', () => evalIso(`__sesliOkuTest.snapshot().testPlayed.length > 0`));
+      await evalIso(`__sesliOkuTest.pause(); __sesliOkuTest.libraryAction('pickExclude')`, true);
+      await evalIso(`(() => { const p=document.querySelector('#p2'); p.dispatchEvent(new PointerEvent('pointermove',{bubbles:true})); p.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); })()`);
+      await waitFor("excluded source area", () => evalIso(`document.querySelector('#p2').hasAttribute('data-sesli-oku-excluded')`));
+      check("excluding a future paragraph updates the active reading session", await evalIso(`!__sesliOkuTest.snapshot().chunks.some(chunk=>chunk.id==='p2')`));
+      await evalIso(`(async()=>{ const url=SesliOkuLibrary.pageKey(location.href); const e=SesliOkuLibrary.current().pages[url].exclusions[0];await SesliOkuLibrary.mutate({type:'excludeRemove',url,id:e.id}); })()`, true);
+      await waitFor("exclusion removed", () => evalIso(`!document.querySelector('#p2').hasAttribute('data-sesli-oku-excluded')`));
+      check("excluded areas can be restored", true);
+      await evalIso(`__sesliOkuTest.stop()`);
+      await pageCdp.send('Page.setDownloadBehavior', { behavior:'allow', downloadPath: profile });
+      const mp3 = readFileSync(path.join(ROOT,'tests','fixture.mp3')).toString('base64');
+      await evalIso(`__sesliOkuTest.audioData(${JSON.stringify(mp3)}); __sesliOkuTest.startBlocks(['#p1','#p2','#p3']); __sesliOkuTest.pause(); __sesliOkuTest.libraryAction('export')`, true);
+      await waitFor("MP3 download ready", () => evalIso(`SesliOkuLibrary.current().export?.status==='done'`));
+      const decodedDuration = await evalIso(`(async()=>{ const b=__sesliOkuTest.experience().exportBlob; const c=new AudioContext();try{return (await c.decodeAudioData(await b.arrayBuffer())).duration;}finally{await c.close();} })()`, true);
+      check("MP3 export combines all three paragraphs into decodable audio", decodedDuration > .85 && decodedDuration < 1.5, String(decodedDuration));
+      const filename = await evalIso(`SesliOkuLibrary.current().export.filename`);
+      await waitFor("MP3 exists on disk", () => existsSync(path.join(profile,filename)));
+      check("MP3 is downloaded with the article filename", readFileSync(path.join(profile,filename)).length > 3000);
+      check("MP3 export preserves paused playback", (await snapshot()).paused);
+      await evalIso(`__sesliOkuTest.requestDelay(300); __sesliOkuTest.libraryAction('export')`, true);
+      await waitFor('cancelable export',()=>evalIso(`SesliOkuLibrary.current().export?.status==='working'`));
+      await evalIso(`__sesliOkuTest.libraryAction('cancelExport')`, true);
+      await WAIT(400);
+      check('canceling MP3 prevents a late completion', await evalIso(`SesliOkuLibrary.current().export.status==='canceled' && !__sesliOkuTest.experience().exporting`));
+      await evalIso(`__sesliOkuTest.requestDelay(0); __sesliOkuTest.toggleSettings(true); document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="library"]').click()`);
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 360, height: 640, deviceScaleFactor: 1, mobile: false });
+      for (const theme of ['modern','win95','win98','xp','win7']) {
+        await evalIso(`SesliOkuThemes.set(${JSON.stringify(theme)})`, true); await WAIT(350);
+        check(`${theme} library and timeline fit a narrow viewport`, await evalIso(`(() => { const r=document.querySelector('#sesli-oku-host').shadowRoot; const p=r.querySelector('.preferences'); return p.scrollWidth<=p.clientWidth+1 && r.querySelector('.playback-strip').scrollWidth<=r.querySelector('.playback-strip').clientWidth+1 && p.getBoundingClientRect().bottom<=innerHeight+1; })()`));
+      }
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
+      await evalIso(`__sesliOkuTest.stop(); __sesliOkuTest.syntheticAudio(150)`);
+      await evalIso(`(async()=>{ for(const item of SesliOkuLibrary.current().queue) await SesliOkuLibrary.mutate({type:'queueRemove',id:item.id}); })()`, true);
+      await evalIso(`SesliOkuLibrary.action('queueAddUrl',{url:${JSON.stringify(`http://127.0.0.1:${serverPort}/queue.html?sesliOkuTest=1&sesliOkuAudio=150&empty=1`)},title:'Empty page'})`, true);
+      for (let i=1;i<=2;i++) await evalIso(`SesliOkuLibrary.action('queueAddUrl',{url:${JSON.stringify(`http://127.0.0.1:${serverPort}/queue.html?sesliOkuTest=1&sesliOkuAudio=150&item=${i}`)},title:'Queue ${i}'})`, true);
+      await evalIso(`SesliOkuLibrary.action('queueStart')`, true);
+      await waitFor("queue finishes both pages", () => evalIso(`SesliOkuLibrary.current().queue.length===3 && SesliOkuLibrary.current().queue.filter(item=>item.status==='done').length===2 && !SesliOkuLibrary.current().queueRunning`), 12000);
+      check("reading queue navigates and reads both pages to completion", true);
+      check("queue skips an empty page and continues", await evalIso(`SesliOkuLibrary.current().queue[0].status==='error'`));
+      check("queue progress remains available in the library", await evalIso(`Object.values(SesliOkuLibrary.current().pages).filter(page=>page.url.includes('/queue.html')).length===2`));
+      await evalIso(`SesliOkuSettings.update(SesliOkuSettings.defaults)`, true);
+    }
+
+    if (process.env.FEATURES_ONLY) {
+      await checkExperienceFeatures();
+      console.log(`\n${passed} passed, ${failed} failed`); if (failed) process.exitCode = 1;
+      return;
+    }
+    async function checkExpandedSettingsFollow() {
+      console.log("\n  Follow with expanded settings");
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
+      await evalIso(`SesliOkuSettings.update({ ...SesliOkuSettings.defaults, autoFollow: true, scrollBehavior: "instant" })`, true);
+      await evalIso(`SesliOkuThemes.set("xp")`, true);
+      await evalIso(`__sesliOkuTest.syntheticAudio(200); __sesliOkuTest.startBlocks(["#p1", "#p2"]); __sesliOkuTest.pause(); __sesliOkuTest.toggleSettings(true);
+        document.querySelector("#sesli-oku-host").shadowRoot.querySelector('[data-tab="appearance"]').click()`);
+      await WAIT(400);
+      for (const inner of [false, true]) {
+        const samples = await evalIso(`(async () => {
+          document.querySelector("#scroll-regression-box")?.remove();
+          document.querySelector("#scroll-regression")?.remove();
+          let box = null;
+          const paragraph = document.createElement("p");
+          paragraph.id = "scroll-regression";
+          paragraph.style.cssText = "font:20px/30px Arial;width:600px;max-width:100%;margin:0;padding:0";
+          paragraph.textContent = Array.from({ length: 90 }, (_, i) => "kelime" + i).join(" ");
+          if (${inner}) {
+            box = document.createElement("div"); box.id = "scroll-regression-box";
+            box.style.cssText = "height:240px;overflow-y:auto;position:relative";
+            const spacer = document.createElement("div"); spacer.style.height = "500px";
+            const tail = document.createElement("div"); tail.style.height = "700px";
+            box.append(spacer, paragraph, tail); document.body.prepend(box);
+            window.scrollTo(0, 0); box.scrollTop = paragraph.offsetTop - 50;
+          } else {
+            document.body.appendChild(paragraph);
+            const host = document.querySelector("#sesli-oku-host").getBoundingClientRect();
+            window.scrollTo(0, window.scrollY + paragraph.getBoundingClientRect().top - host.bottom - 50);
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+          __sesliOkuTest.setFollow(true);
+          const words = [...paragraph.textContent.matchAll(/\\S+/g)];
+          const positions = [box ? box.scrollTop : window.scrollY];
+          for (const word of words.slice(0, 5)) {
+            __sesliOkuTest.showWord("#scroll-regression", word.index, word.index + word[0].length);
+            await new Promise(resolve => setTimeout(resolve, 55));
+            positions.push(box ? box.scrollTop : window.scrollY);
+          }
+          return positions;
+        })()`, true);
+        const deltas = samples.slice(1).map((value, index) => value - samples[index]).filter(delta => Math.abs(delta) > 2);
+        check(`${inner ? "inner" : "window"} follow does not alternate scroll direction for consecutive words`,
+          !deltas.some((delta, index) => index && delta * deltas[index - 1] < 0), JSON.stringify({ samples, deltas }));
+        check(`${inner ? "inner" : "window"} follow leaves already visible words in place`,
+          Math.max(...samples) - Math.min(...samples) <= 2, JSON.stringify(samples));
+      }
+      await evalIso(`(() => {
+        document.querySelector("#scroll-regression-box")?.remove();
+        const paragraph = document.createElement("p"); paragraph.id = "scroll-regression";
+        paragraph.style.cssText = "font:20px/30px Arial;width:600px;max-width:100%;margin:0;padding:0";
+        paragraph.textContent = Array.from({ length: 90 }, (_, i) => "kelime" + i).join(" ");
+        document.body.appendChild(paragraph);
+        const header = document.createElement("nav"); header.id = "scroll-regression-admin";
+        header.style.cssText = "position:fixed;top:0;left:0;right:0;height:32px;background:#30343a;z-index:99999";
+        document.body.prepend(header);
+      })()`);
+      await WAIT(120);
+      const headerCase = await evalIso(`(async () => {
+        const paragraph = document.querySelector("#scroll-regression");
+        const host = document.querySelector("#sesli-oku-host").getBoundingClientRect();
+        window.scrollTo(0, window.scrollY + paragraph.getBoundingClientRect().top - host.bottom - 10);
+        await new Promise(resolve => setTimeout(resolve, 80));
+        __sesliOkuTest.setFollow(true); __sesliOkuTest.showWord("#scroll-regression", 0, 7);
+        await new Promise(resolve => setTimeout(resolve, 80));
+        return { wordTop: paragraph.getBoundingClientRect().top,
+          headerBottom: document.querySelector("#scroll-regression-admin").getBoundingClientRect().bottom };
+      })()`, true);
+      check("follow accounts for a fixed site header below expanded settings", headerCase.wordTop >= headerCase.headerBottom + 4, JSON.stringify(headerCase));
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 400, deviceScaleFactor: 1, mobile: false });
+      await WAIT(150);
+      const noRoom = await evalIso(`(async () => {
+        const paragraph = document.querySelector("#scroll-regression");
+        const before = window.scrollY;
+        const words = [...paragraph.textContent.matchAll(/\\S+/g)].slice(0, 5);
+        __sesliOkuTest.setFollow(true);
+        for (const word of words) {
+          __sesliOkuTest.showWord("#scroll-regression", word.index, word.index + word[0].length);
+          await new Promise(resolve => setTimeout(resolve, 40));
+        }
+        return { before, after: window.scrollY };
+      })()`, true);
+      check("follow stays still when expanded panels leave no room for a line", approx(noRoom.before, noRoom.after), JSON.stringify(noRoom));
+      await pageCdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
+      await evalIso(`SesliOkuSettings.update({ scrollBehavior: "smooth" })`, true);
+      await WAIT(150);
+      const smooth = await evalIso(`(async () => {
+        const paragraph = document.querySelector("#scroll-regression");
+        const panel = document.querySelector("#bottom-panel").getBoundingClientRect();
+        window.scrollTo(0, window.scrollY + paragraph.getBoundingClientRect().top - panel.top - 40);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        __sesliOkuTest.setFollow(true);
+        const positions = [window.scrollY];
+        const words = [...paragraph.textContent.matchAll(/\\S+/g)].slice(0, 5);
+        for (const word of words) {
+          __sesliOkuTest.showWord("#scroll-regression", word.index, word.index + word[0].length);
+          await new Promise(resolve => setTimeout(resolve, 65));
+          positions.push(window.scrollY);
+        }
+        await new Promise(resolve => setTimeout(resolve, 450)); positions.push(window.scrollY);
+        return { positions, wordTop: paragraph.getBoundingClientRect().top, wordBottom: paragraph.getBoundingClientRect().top + 30,
+          headerBottom: document.querySelector("#scroll-regression-admin").getBoundingClientRect().bottom,
+          panelTop: document.querySelector("#bottom-panel").getBoundingClientRect().top };
+      })()`, true);
+      check("smooth follow advances without reversing on successive words", smooth.positions.every((position, index) => !index || position >= smooth.positions[index - 1] - 2) && smooth.positions.at(-1) > smooth.positions[0], JSON.stringify(smooth));
+      check("smooth follow settles between the settings header and bottom panel", smooth.wordTop >= smooth.headerBottom + 4 && smooth.wordBottom <= smooth.panelTop - 4, JSON.stringify(smooth));
+      await evalIso(`__sesliOkuTest.stop(); document.querySelector("#scroll-regression-box")?.remove(); document.querySelector("#scroll-regression")?.remove(); document.querySelector("#scroll-regression-admin")?.remove()`);
+      await pageCdp.send("Emulation.clearDeviceMetricsOverride");
+    }
+    if (process.env.SCROLL_REGRESSION_ONLY) {
+      await checkExpandedSettingsFollow();
+      console.log(`\n${passed} passed, ${failed} failed`);
+      if (failed) process.exitCode = 1;
+      return;
+    }
 
     console.log("\nSesli Oku integration tests\n");
 
@@ -533,6 +802,7 @@ async function main() {
     await waitFor("test hook after navigation", async () =>
       evalIso("typeof window.__sesliOkuTest === 'object'")
     );
+    await evalIso("__sesliOkuTest.syntheticAudio(150)");
 
     await evalIso(
       `__sesliOkuTest.start({ voice: "tr-TR-EmelNeural", rate: 0, volume: 0, pitch: 0 })`
@@ -774,6 +1044,64 @@ async function main() {
       return result.result.value;
     };
     await waitFor("popup theme controls", () => evalPopup(`document.querySelector("#theme")?.options.length === 5`));
+    async function checkColorModes() {
+      console.log("\n  Light and dark appearance");
+      await evalIso(`__sesliOkuTest.start(); __sesliOkuTest.pause(); __sesliOkuTest.toggleSettings(true); document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="appearance"]').click()`);
+      const before = await snapshot();
+      const siteColor = await evalIso(`getComputedStyle(document.body).backgroundColor`);
+      const inspect = expression => `(() => { const root=${expression};const select=root.querySelector('[data-setting="colorMode"]');const panel=root.querySelector('.pref-pane:not([hidden])');
+        const paint=node=>{for(let current=node;current;current=current.parentElement){const style=getComputedStyle(current);const rgb=style.backgroundColor.match(/[\\d.]+/g)?.map(Number);if(rgb&&(rgb.length===3||rgb[3]>.8))return style.backgroundColor;const stops=style.backgroundImage.match(/rgba?\\([^)]+\\)/g);if(stops?.length)return stops.at(-1);}return 'rgb(255, 255, 255)';};
+        const colors=[root,panel,select,root.querySelector('.settings')||root.querySelector('.actions'),root.querySelector('.status')||root].filter(Boolean).map(paint);
+        return { mode:root.dataset.colorMode, colors, scheme:getComputedStyle(root).colorScheme, choice:select.value, aria:root.querySelector('[data-select-for="'+select.id+'"]').getAttribute('aria-label') }; })()`;
+      for (const theme of ['win95','win98','xp','win7','modern']) {
+        await evalIso(`SesliOkuThemes.set(${JSON.stringify(theme)})`,true);
+        for (const mode of ['dark','light']) {
+          await evalIso(`(() => { const select=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-setting="colorMode"]');select.value=${JSON.stringify(mode)};select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+          await waitFor(`${theme} ${mode} synchronizes popup`,()=>evalPopup(`document.body.dataset.colorMode===${JSON.stringify(mode)} && document.querySelector('#colorMode').value===${JSON.stringify(mode)}`));
+          await WAIT(350);
+          const player = await evalIso(inspect(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.wrap')`));
+          await evalPopup(`document.querySelector('[data-tab="appearance"]').click()`);
+          const popup = await evalPopup(inspect('document.body'));
+          const dark = mode==='dark';
+          const luminance = color => {const numbers=color.match(/[\d.]+/g).map(Number);return numbers[0]*.2126+numbers[1]*.7152+numbers[2]*.0722;};
+          check(`${theme} ${mode} paints both surfaces and form fields`, [player,popup].every(result=>result.mode===mode && result.colors.every(color=>dark?luminance(color)<110:luminance(color)>150)) ,JSON.stringify({player,popup}));
+          check(`${theme} ${mode} synchronizes its accessible selection`, player.choice===mode && popup.choice===mode && player.aria.includes(dark?'Koyu':'Açık') && popup.aria.includes(dark?'Koyu':'Açık'));
+          if (dark) {
+            await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('#sesli-oku-colorMode-trigger').click()`);
+            check(`${theme} dark dropdown uses a dark track and readable text`, await evalIso(`(() => { const root=document.querySelector('#sesli-oku-host').shadowRoot; const list=root.querySelector('#sesli-oku-colorMode-listbox');const style=getComputedStyle(list);return list.matches(':popover-open') && style.getPropertyValue('--drop-track').trim()==='#20272e' && style.color==='rgb(237, 240, 243)'; })()`));
+            await evalIso(`SesliOkuSettings.closeDropdowns()`);
+            if (process.env.COLOR_SCREENSHOT) writeFileSync(`/tmp/color-${theme}.png`,Buffer.from((await pageCdp.send('Page.captureScreenshot')).data,'base64'));
+          }
+        }
+      }
+      check('color mode preserves playback and site colors', (await snapshot()).session===before.session && (await snapshot()).paused===before.paused && siteColor===await evalIso(`getComputedStyle(document.body).backgroundColor`));
+      const colorFade = await evalIso(`(async()=>{await SesliOkuThemes.setMode('dark');const r=document.querySelector('#sesli-oku-host').shadowRoot;const copy=r.querySelector('[data-theme-snapshot]');return !!copy&&copy.inert&&copy.dataset.colorMode==='light'&&r.querySelector('.wrap').dataset.colorMode==='dark';})()`,true);
+      check('light and dark skins crossfade with an inert old layer',colorFade);
+      await evalIso(`SesliOkuThemes.set('xp')`, true);
+      await waitFor('saved dark color mode',()=>evalPopup(`document.body.dataset.colorMode==='dark'`));
+      await popupCdp.send('Page.reload');
+      await waitFor('dark mode after popup reload',()=>evalPopup(`document.body.dataset.colorMode==='dark' && document.body.dataset.theme==='xp' && document.querySelector('#colorMode')?.value==='dark'`));
+      check('color mode survives reopening popup',true);
+      const profile = await evalIso(`SesliOkuSettings.saveProfile('Renk testi')`,true);
+      await evalIso(`SesliOkuThemes.setMode('light')`,true);
+      await evalIso(`SesliOkuSettings.applyProfile(${JSON.stringify(profile.id)})`,true);
+      check('saved profiles restore color mode',await evalIso(`SesliOkuThemes.mode()==='dark'`));
+      await evalIso(`SesliOkuSettings.removeProfile(${JSON.stringify(profile.id)})`,true);
+      await evalIso(`(async()=>{ await SesliOkuThemes.setMode('light');await SesliOkuThemes.setMode('dark');await SesliOkuThemes.setMode('light'); })()`,true);
+      await WAIT(400);
+      check('rapid color switches remove obsolete snapshots',await evalIso(`(() => {const r=document.querySelector('#sesli-oku-host').shadowRoot;return r.querySelector('.wrap').dataset.colorMode==='light'&&!r.querySelector('[data-theme-snapshot],[data-theme-transition]');})()`));
+      await evalIso(`chrome.storage.local.set({appearanceMode:'invalid-mode'})`,true);
+      await waitFor('invalid mode normalizes',()=>evalPopup(`document.body.dataset.colorMode==='original'`));
+      check('unknown color modes restore the original appearance',true);
+      await evalIso(`SesliOkuThemes.set('modern');SesliOkuThemes.setMode('original')`,true);
+      await WAIT(400);
+      await evalIso(`__sesliOkuTest.stop()`);
+    }
+    if (process.env.COLORS_ONLY) {
+      await checkColorModes();
+      console.log(`\n${passed} passed, ${failed} failed`); if (failed) process.exitCode=1;
+      return;
+    }
     check("popup and toolbar offer all five themes", await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-theme").options.length === 5`));
     const beforeTheme = await snapshot();
     const sitePanelColor = await evalIso(`getComputedStyle(document.querySelector("#bottom-panel")).backgroundColor`);
@@ -787,7 +1115,7 @@ async function main() {
       await waitFor(`${theme} syncs to popup`, () => evalPopup(`document.body.dataset.theme === ${JSON.stringify(theme)} && document.querySelector("#theme").value === ${JSON.stringify(theme)}`));
       await WAIT(100);
       const themed = await snapshot();
-      check(`${theme} preserves the reading session and pause state`, themed.session === beforeTheme.session && themed.paused === beforeTheme.paused && themed.index === beforeTheme.index && themed.follow === beforeTheme.follow);
+      check(`${theme} preserves the reading session and pause state`, themed.session === beforeTheme.session && themed.paused === beforeTheme.paused && themed.index === beforeTheme.index && themed.follow === beforeTheme.follow, JSON.stringify({ before: beforeTheme, after: themed }));
       check(`${theme} keeps the toolbar fixed and page below it`, approx(themed.hostRect.top, 0) && await evalIso(`document.querySelector("#reader").getBoundingClientRect().top >= document.querySelector("#sesli-oku-host").getBoundingClientRect().bottom - 1`));
       check(`${theme} leaves site controls unthemed`, sitePanelColor === await evalIso(`getComputedStyle(document.querySelector("#bottom-panel")).backgroundColor`));
       if (theme !== "modern") {
@@ -805,6 +1133,25 @@ async function main() {
           return Math.abs((transport.left + transport.right) / 2 - (bar.left + bar.right) / 2) < 2 &&
             status.width <= 161 && status.right <= transport.left;
         })()`));
+      }
+      if (theme !== "modern") {
+        const checkboxState = expression => `(() => {
+          const input = ${expression};
+          const style = getComputedStyle(input);
+          const mark = getComputedStyle(input, "::after");
+          return style.appearance === "none" && style.opacity === "1" &&
+            mark.content !== "none" && mark.backgroundImage.startsWith('url("data:image/svg+xml,');
+        })()`;
+        check(`${theme} paints themed checkboxes in both popup and player`,
+          await evalIso(checkboxState(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-continueSelection")`)) &&
+          await evalPopup(checkboxState(`document.querySelector("#continueSelection")`)));
+        await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-continueSelection").closest("label").click()`);
+        await waitFor(`${theme} checkbox label clears its setting`, () => evalIso(`!SesliOkuSettings.current().continueSelection`));
+        await waitFor(`${theme} checkbox syncs to popup`, () => evalPopup(`!document.querySelector("#continueSelection").checked`));
+        const unchecked = await evalIso(`getComputedStyle(document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-continueSelection"), "::after").content === "none"`);
+        await evalPopup(`document.querySelector("#continueSelection").closest("label").click()`);
+        await waitFor(`${theme} popup checkbox syncs back`, () => evalIso(`SesliOkuSettings.current().continueSelection && document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-continueSelection").checked`));
+        check(`${theme} checkbox labels toggle and synchronize without losing native behavior`, unchecked && await evalPopup(`document.querySelector("#continueSelection").checked`));
       }
       if (theme === "win95" || theme === "win98") {
         await waitFor("classic pixel fonts", () => evalIso(`Array.from(document.fonts).filter(face => face.family === "Sesli Oku Classic" && face.status === "loaded").length === 2`));
@@ -872,6 +1219,49 @@ async function main() {
       })()`));
       await pageCdp.send("Emulation.clearDeviceMetricsOverride");
       await WAIT(100);
+      const fillVoices = expression => `(() => {
+        const select = ${expression};
+        const group = document.createElement("optgroup"); group.label = "Türkçe (Türkiye)";
+        for (let index = 0; index < 85; index++) {
+          const option = document.createElement("option");
+          option.value = index === 0 ? "tr-TR-EmelNeural" : "test-voice-" + index;
+          option.textContent = index === 0 ? "Emel · Kadın" : "Deneme sesi " + String(index).padStart(2, "0");
+          group.appendChild(option);
+        }
+        select.replaceChildren(group); select.value = "tr-TR-EmelNeural";
+      })()`;
+      await evalIso(fillVoices(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice")`));
+      await evalPopup(fillVoices(`document.querySelector("#voice")`));
+      await WAIT(30);
+      for (const [surface, evaluate, client, expression] of [
+        ["player", evalIso, pageCdp, `document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice")`],
+        ["popup", evalPopup, popupCdp, `document.querySelector("#voice")`],
+      ]) {
+        const beforeMenu = await snapshot();
+        const openMenu = await evaluate(`(() => {
+          const select = ${expression}; const wrapper = select.parentElement;
+          wrapper.querySelector(".pref-select-trigger").click();
+          const list = wrapper.querySelector(".pref-select-popup");
+          const rect = list.getBoundingClientRect();
+          const scrollbar = getComputedStyle(list, "::-webkit-scrollbar");
+          const thumb = getComputedStyle(list, "::-webkit-scrollbar-thumb");
+          list.scrollTop = list.scrollHeight;
+          return { open: list.matches(":popover-open"), scrollbarWidth: scrollbar.width,
+            thumb: thumb.backgroundImage !== "none" || thumb.backgroundColor !== "rgba(0, 0, 0, 0)",
+            scrollable: list.scrollHeight > list.clientHeight && list.scrollTop > 0,
+            inView: rect.top >= 3 && rect.bottom <= window.innerHeight - 3,
+            groups: list.querySelectorAll('[role="group"]').length };
+        })()`);
+        check(`${theme} ${surface} opens a scrollable themed voice list`, openMenu.open && openMenu.scrollbarWidth === "17px" && openMenu.thumb && openMenu.scrollable && openMenu.inView && openMenu.groups === 1, JSON.stringify(openMenu));
+        await WAIT(60);
+        if (surface === "player") check(`${theme} dropdown scrolling leaves reading follow and page position intact`, (await snapshot()).follow === beforeMenu.follow && approx((await snapshot()).scrollY, beforeMenu.scrollY));
+        if (process.env.SCREENSHOT_DIR) {
+          const { writeFileSync } = await import("node:fs");
+          const shot = await client.send("Page.captureScreenshot", { format: "png" });
+          writeFileSync(path.join(process.env.SCREENSHOT_DIR, `${theme}-voice-menu-${surface}.png`), Buffer.from(shot.data, "base64"));
+        }
+        await evaluate(`(${expression}).parentElement.querySelector(".pref-select-trigger").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+      }
       if (process.env.SCREENSHOT_DIR) {
         await evalIso("__sesliOkuTest.toggleSettings(true)");
         await WAIT(100);
@@ -882,6 +1272,47 @@ async function main() {
         }
       }
     }
+    console.log("\n  Themed dropdown interactions");
+    await evalIso(`(() => {
+      const select = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice");
+      select.options[1].disabled = true;
+    })()`);
+    await WAIT(20);
+    const keyboardSelection = await evalIso(`(() => {
+      const select = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice");
+      const trigger = select.parentElement.querySelector(".pref-select-trigger");
+      for (const key of ["ArrowDown", "ArrowDown", "Enter"]) trigger.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      return { value: select.value, open: select.parentElement.querySelector(".pref-select-popup").matches(":popover-open") };
+    })()`);
+    await waitFor("dropdown selection updates voice", () => evalIso(`SesliOkuSettings.current().voice === "test-voice-2"`));
+    check("keyboard selection skips disabled voices and commits through existing settings", keyboardSelection.value === "test-voice-2" && !keyboardSelection.open);
+    const canceled = await evalIso(`(() => {
+      const select = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice");
+      const trigger = select.parentElement.querySelector(".pref-select-trigger");
+      for (const key of ["ArrowDown", "End", "Escape"]) trigger.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      return select.value === "test-voice-2" && trigger.getAttribute("aria-expanded") === "false";
+    })()`);
+    check("Escape cancels a pending dropdown selection", canceled);
+    await evalIso(`(() => {
+      const select = document.querySelector("#sesli-oku-host").shadowRoot.querySelector("#sesli-oku-voice");
+      const trigger = select.parentElement.querySelector(".pref-select-trigger");
+      for (const key of ["e", "m"]) trigger.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    })()`);
+    await waitFor("voice type-ahead selection", () => evalIso(`SesliOkuSettings.current().voice === "tr-TR-EmelNeural"`));
+    check("typing searches the voice options", true);
+    await evalIso(`(() => {
+      const root = document.querySelector("#sesli-oku-host").shadowRoot;
+      root.querySelector(".pref-profile-box").open = true;
+      root.querySelector('[data-select-for="sesli-oku-profile"]').click();
+      root.querySelector("#sesli-oku-profile-listbox [data-option-index='1']").click();
+    })()`);
+    check("profile dropdown commits inside its label without reopening", await evalIso(`(() => {
+      const root = document.querySelector("#sesli-oku-host").shadowRoot;
+      return root.querySelector("#sesli-oku-profile").value === "study" && !root.querySelector(".pref-select-popup:popover-open");
+    })()`));
+    await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".pref-profile-box").open = false`);
+    await WAIT(100);
+
     console.log("\n  Theme transitions");
     await WAIT(400);
     const beforeFade = await snapshot();
@@ -1057,6 +1488,162 @@ async function main() {
     await waitFor("saved theme on new page", async () => (await snapshot()).theme === "win7");
     check("saved theme applies after page reload", await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".wrap").dataset.theme === "win7"`));
     await evalIso("__sesliOkuTest.stop()");
+
+    console.log("\n  Reading preferences and profiles");
+    await evalIso("__sesliOkuTest.syntheticAudio(120)");
+    await evalIso(`SesliOkuSettings.update({ ...SesliOkuSettings.defaults, autoFollow: false })`, true);
+    await evalIso(`__sesliOkuTest.startBlocks(["#p1", "#p2"]); __sesliOkuTest.pause(); __sesliOkuTest.toggleSettings(true)`);
+    const pausedSettingsSession = (await snapshot()).session;
+    for (const tab of ["reading", "appearance", "behavior"]) {
+      await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector('[data-tab="${tab}"]').click()`);
+      check(`${tab} property page is the only visible panel`, await evalIso(`(() => {
+        const root = document.querySelector("#sesli-oku-host").shadowRoot;
+        return root.querySelectorAll('.pref-pane:not([hidden])').length === 1 &&
+          root.querySelector('.pref-tab[aria-selected="true"]').dataset.tab === "${tab}";
+      })()`));
+    }
+    await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector('[data-tab="appearance"]').click()`);
+    for (const mode of ["both", "word", "paragraph", "off"]) {
+      await evalIso(`SesliOkuSettings.update({ highlightMode: "${mode}" })`, true);
+      await evalIso(`__sesliOkuTest.showWord("#p1", 0, 7)`);
+      await WAIT(250);
+      const styles = await evalIso(`(() => {
+        const paragraph = getComputedStyle(document.querySelector(".edge-ra-current"));
+        const glow = getComputedStyle(document.querySelector("#sesli-oku-spotlight"));
+        return { paragraph: paragraph.backgroundColor !== "rgba(0, 0, 0, 0)", glow: Number(glow.opacity) > 0 };
+      })()`);
+      check(`${mode} highlight mode controls paragraph and word glow`, styles.paragraph === ["both", "paragraph"].includes(mode) && styles.glow === ["both", "word"].includes(mode), JSON.stringify(styles));
+    }
+    await evalIso(`SesliOkuSettings.update({ highlightMode: "both", highlightColor: "#ff6600", highlightOpacity: 50, glowIntensity: 0 })`, true);
+    await WAIT(250);
+    check("custom highlight color, opacity and disabled glow apply live", await evalIso(`(() => {
+      const paragraph = getComputedStyle(document.querySelector(".edge-ra-current"));
+      const glow = getComputedStyle(document.querySelector("#sesli-oku-spotlight"));
+      return paragraph.backgroundColor === "rgba(255, 102, 0, 0.5)" && Number(glow.opacity) === 0 && glow.boxShadow === "none";
+    })()`));
+    check("appearance settings do not restart audio", (await snapshot()).session === pausedSettingsSession);
+    // Give scrolling tests a real visible reading area. The expanded panel
+    // and fixture's composer cover the whole small default viewport.
+    await evalIso("__sesliOkuTest.toggleSettings(false)");
+    await WAIT(100);
+    const scrollWithoutFollow = (await snapshot()).scrollY;
+    await evalIso(`__sesliOkuTest.showWord("#p10", 0, 6)`);
+    await WAIT(100);
+    check("disabled auto follow keeps the user's page position", (await snapshot()).follow === false && approx((await snapshot()).scrollY, scrollWithoutFollow));
+    await evalIso(`SesliOkuSettings.update({ scrollBehavior: "instant" })`, true);
+    const scrollModes = await evalIso(`(() => {
+      const modes = []; const original = window.scrollBy;
+      window.scrollBy = options => { modes.push(options.behavior); original.call(window, options); };
+      __sesliOkuTest.resume(); window.scrollBy = original;
+      return modes;
+    })()`);
+    check("instant scrolling reaches the actual scroll API", scrollModes.includes("instant"), JSON.stringify(scrollModes));
+    await evalIso(`SesliOkuSettings.update({ autoFollow: false, continueSelection: false, pitch: 15 })`, true);
+    check("pitch changes reach speech requests and preserve pause", (await snapshot()).paused && (await snapshot()).settings.pitch === 15);
+    await waitFor("pitch request", async () => (await snapshot()).testRequests.some(request => request.settings.pitch === 15));
+    await waitFor("popup settings sync", () => evalPopup(`document.querySelector("#pitch").value === "15" && !document.querySelector("#continueSelection").checked`));
+    check("toolbar preferences synchronize to popup", await evalPopup(`document.querySelector("#pitch").value === "15"`));
+    await evalPopup(`(() => {
+      const input = document.querySelector("#volume"); input.value = "-15";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    })()`);
+    await waitFor("popup settings reach reading tab", async () => (await snapshot()).settings.volume === -15);
+    check("popup preferences synchronize back without losing other settings", (await snapshot()).settings.pitch === 15 && !(await snapshot()).settings.continueSelection);
+    await evalIso(`(() => {
+      __sesliOkuTest.toggleSettings(true);
+      const root = document.querySelector("#sesli-oku-host").shadowRoot;
+      root.querySelector(".pref-profile-box").open = true;
+      root.querySelector(".pref-editor").open = true;
+      root.querySelector("#sesli-oku-profile-name").value = "Deneme profili";
+      root.querySelector('[data-profile="save"]').click();
+    })()`);
+    await waitFor("profile saved through the panel", () => evalIso(`SesliOkuSettings.profiles().some(profile => profile.name === "Deneme profili")`));
+    await evalIso(`SesliOkuSettings.update({ pitch: 0, highlightColor: "theme", volume: 0 })`, true);
+    await evalIso(`SesliOkuThemes.set("xp")`, true);
+    await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector('[data-profile="apply"]').click()`);
+    await waitFor("saved profile applied through panel", async () => (await snapshot()).settings.pitch === 15 && (await snapshot()).theme === "win7");
+    check("saved profiles restore voice, reading and appearance preferences", (await snapshot()).settings.pitch === 15 && (await snapshot()).settings.volume === -15 && (await snapshot()).settings.highlightColor === "#ff6600" && (await snapshot()).theme === "win7");
+    await evalIso(`SesliOkuSettings.applyProfile("study")`, true);
+    check("study preset applies slower reading and paragraph pauses", (await snapshot()).settings.rate === -10 && (await snapshot()).settings.paragraphDelay === 1000);
+    await evalIso(`SesliOkuSettings.applyProfile("night")`, true);
+    check("night preset applies quieter voice and gentler highlighting", (await snapshot()).settings.volume === -20 && (await snapshot()).settings.highlightMode === "word" && (await snapshot()).theme === "modern");
+    await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector('[data-profile="delete"]').click()`);
+    await waitFor("profile deleted through panel", () => evalIso(`!SesliOkuSettings.profiles().some(profile => profile.name === "Deneme profili")`));
+    await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector(".pref-profile-box").open = false`);
+    check("saved profiles can be deleted", await evalIso(`!SesliOkuSettings.profiles().some(profile => profile.name === "Deneme profili")`));
+    check("settings normalize invalid storage values", await evalIso(`(() => {
+      const value = SesliOkuSettings.normalize({ pitch: 1000, paragraphDelay: -50, highlightColor: "red; color: white", highlightMode: "invalid", glowIntensity: 200 });
+      return value.pitch === 50 && value.paragraphDelay === 0 && value.highlightColor === "theme" && value.highlightMode === "both" && value.glowIntensity === 100;
+    })()`));
+    if (process.env.SCREENSHOT_DIR) {
+      await evalIso("__sesliOkuTest.toggleSettings(true)");
+      const { writeFileSync } = await import("node:fs");
+      for (const tab of ["reading", "appearance", "behavior"]) {
+        await evalIso(`document.querySelector("#sesli-oku-host").shadowRoot.querySelector('[data-tab="${tab}"]').click()`);
+        await evalPopup(`document.querySelector('[data-tab="${tab}"]').click()`);
+        await WAIT(150);
+        for (const [label, client] of [["toolbar", pageCdp], ["popup", popupCdp]]) {
+          const shot = await client.send("Page.captureScreenshot", { format: "png" });
+          writeFileSync(path.join(process.env.SCREENSHOT_DIR, `preferences-${tab}-${label}.png`), Buffer.from(shot.data, "base64"));
+        }
+      }
+    }
+    await evalIso("__sesliOkuTest.stop()");
+    await evalIso(`SesliOkuSettings.update({ ...SesliOkuSettings.defaults, paragraphDelay: 500, autoFollow: false })`, true);
+    await evalIso(`__sesliOkuTest.syntheticAudio(120); __sesliOkuTest.startBlocks(["#p1", "#p2"])`);
+    await waitFor("paragraph gap", async () => (await snapshot()).gapWaiting);
+    await evalIso("__sesliOkuTest.pause()");
+    await WAIT(650);
+    check("paragraph wait pauses with playback", (await snapshot()).testPlayed.length === 1 && (await snapshot()).gapWaiting);
+    await evalIso("__sesliOkuTest.playback()");
+    await waitFor("next paragraph after gap", async () => (await snapshot()).testPlayed.length === 2);
+    let played = (await snapshot()).testPlayed;
+    check("paragraphs are separated by the configured pause", played[1].at - played[0].at >= 600, JSON.stringify(played));
+    await evalIso("__sesliOkuTest.stop()");
+    await evalIso(`SesliOkuSettings.update({ paragraphDelay: 0 })`, true);
+    await evalIso(`(() => {
+      const paragraph = document.createElement("p"); paragraph.id = "long-paragraph";
+      paragraph.textContent = "Uzun paragrafın birden çok ses parçasına bölünmesi gerekir. ".repeat(42);
+      document.body.appendChild(paragraph);
+      __sesliOkuTest.syntheticAudio(150);
+      __sesliOkuTest.startBlocks(["#long-paragraph", "#p2"]);
+      __sesliOkuTest.timer({ mode: "paragraph" });
+    })()`);
+    const longChunkCount = (await snapshot()).total - 1;
+    await waitFor("sleep at paragraph end", async () => !(await snapshot()).playing);
+    played = (await snapshot()).testPlayed;
+    check("paragraph timer waits for all chunks of the paragraph", played.length === longChunkCount && played.every(item => item.id === "long-paragraph") && (await snapshot()).status === "Paragraf tamamlandı", JSON.stringify({ longChunkCount, played }));
+    await evalIso(`__sesliOkuTest.syntheticAudio(150); __sesliOkuTest.startBlocks(["#p1", "#p2"]); __sesliOkuTest.pause(); __sesliOkuTest.deadline(650)`);
+    const sleepDeadline = (await snapshot()).sleepTimer.deadline;
+    await evalIso(`SesliOkuSettings.update({ pitch: 20 })`, true);
+    check("changing a voice setting does not reset sleep deadline", (await snapshot()).sleepTimer.deadline === sleepDeadline && (await snapshot()).paused);
+    await waitFor("deadline stops paused audio", async () => !(await snapshot()).playing);
+    check("time-based sleep stops even while paused", (await snapshot()).sleepTimer === null && (await snapshot()).status === "Zamanlayıcı: okuma durduruldu");
+    await evalIso(`chrome.runtime.sendMessage({ target: "background", type: "START_PAGE" })`, true);
+    await evalIso("__sesliOkuTest.pause()");
+    await evalPopup(`(() => {
+      document.querySelector('[data-tab="behavior"]').click();
+      document.querySelector("#sleep-mode").value = "custom";
+      document.querySelector("#sleep-mode").dispatchEvent(new Event("change", { bubbles: true }));
+      document.querySelector("#sleep-minutes").value = "5";
+      document.querySelector("[data-timer]").click();
+    })()`);
+    await waitFor("popup configures sleep timer", async () => !!(await snapshot()).sleepTimer?.deadline);
+    check("popup timer controls the active reading tab", (await snapshot()).sleepTimer.deadline > Date.now() + 290000);
+    const previousDeadline = (await snapshot()).sleepTimer.deadline;
+    check("invalid duration leaves the active timer intact", await evalIso(`(() => { try { __sesliOkuTest.timer({ mode: "custom", minutes: -1 }); return false; } catch { return true; } })()`) && (await snapshot()).sleepTimer.deadline === previousDeadline);
+    await evalIso("__sesliOkuTest.timer({ mode: 'off' })");
+    check("timer can be canceled without stopping reading", (await snapshot()).sleepTimer === null && (await snapshot()).playing);
+    await evalIso("__sesliOkuTest.stop()");
+    await evalIso(`SesliOkuSettings.update(SesliOkuSettings.defaults)`, true);
+    await popupCdp.send("Page.reload");
+    await waitFor("preferences after popup reload", () => evalPopup(`typeof SesliOkuSettings === "object" && document.querySelector("#pitch")?.value === "0"`));
+    check("new preferences survive reloading popup", await evalPopup(`document.querySelector("#glowIntensity").value === "60" && document.querySelector("#autoFollow").checked`));
+
+    await checkClickReading();
+    await checkColorModes();
+    await checkExpandedSettingsFollow();
+    await checkExperienceFeatures();
 
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failures.length) {

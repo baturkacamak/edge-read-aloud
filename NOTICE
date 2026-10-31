@@ -37,7 +37,8 @@ Classic theme assets and adapted control borders
 -----------------------------------------------
 
 The pixelated MS Sans Serif font files in src/vendor/98.css and classic
-control border definitions adapted in src/themes.js come from:
+control borders and pixel checkmark adapted in src/themes.js and
+src/settings.js come from:
 
     jdan/98.css — https://github.com/jdan/98.css
     Copyright 2020 Jordan Scales

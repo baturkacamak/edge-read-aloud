@@ -1,4 +1,7 @@
-import { tts, listVoices, DEFAULT_VOICE } from "./tts.js";
+import "./library.js";
+import "./settings.js";
+const library = globalThis.SesliOkuLibrary;
+import { tts, listVoices } from "./tts.js";
 
 const VOICES_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -53,14 +56,7 @@ const FALLBACK_VOICES = [
 
 async function getSettings() {
   const { settings } = await chrome.storage.local.get("settings");
-  return {
-    voice: settings?.voice || DEFAULT_VOICE,
-    rate: settings?.rate ?? 0,
-    pitch: settings?.pitch ?? 0,
-    volume: settings?.volume ?? 0,
-    playbackRate: settings?.playbackRate ?? 1,
-    continueSelection: settings?.continueSelection !== false,
-  };
+  return globalThis.SesliOkuSettings.normalize(settings);
 }
 
 async function getVoices() {
@@ -113,7 +109,7 @@ async function ensureContent(tabId) {
     });
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["src/themes.js", "src/content.js"],
+      files: ["src/themes.js", "src/library.js", "src/settings.js", "src/experience.js", "src/content.js"],
     });
   } catch {
     return false;
@@ -140,6 +136,12 @@ async function sendToTab(tabId, message) {
 async function startOnActiveTab(kind, extra = {}) {
   const tab = await activeTab();
   if (!tab?.id) throw new Error("Etkin sekme bulunamadı.");
+  await library.ready;
+  const queueOwner = library.current().queueTabId;
+  if (library.current().queueRunning) {
+    await library.mutate({ type: "queueStop" }); await chrome.alarms.clear(QUEUE_ALARM);
+    if (queueOwner && queueOwner !== tab.id) { try { await sendToTab(queueOwner, { target: "content", type: "STOP", keepQueue: true }); } catch {} }
+  }
   const settings = await getSettings();
   readingTabId = tab.id;
   return sendToTab(tab.id, {
@@ -175,8 +177,15 @@ function createMenus() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(createMenus);
-chrome.runtime.onStartup.addListener(createMenus);
+function initializeExtension() {
+  createMenus();
+  // Sleep timers belong to live playback sessions, not browser restarts.
+  chrome.storage.local.remove("readingTimer").catch(() => {});
+  library.mutate({ type: "queueStop" }).catch(() => {});
+  library.mutate({ type: "export", value: null }).catch(() => {});
+}
+chrome.runtime.onInstalled.addListener(initializeExtension);
+chrome.runtime.onStartup.addListener(initializeExtension);
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "edge-ra-read-page" && tab?.id) {
@@ -247,11 +256,147 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === readingTabId) {
     readingTabId = null;
     tts.close();
+    chrome.storage.local.remove("readingTimer").catch(() => {});
   }
+  if (library.current().queueTabId === tabId) library.mutate({ type: "queueStop" }).catch(() => {});
+  if (library.current().export?.tabId === tabId) library.mutate({ type: "export", value: { status: "canceled" } }).catch(() => {});
+  queueStarted.delete(tabId);
 });
+
+const QUEUE_ALARM = "sesli-oku-queue-load";
+let queueBusy = false;
+const queueStarted = new Map();
+
+async function advanceQueue() {
+  if (queueBusy) return;
+  queueBusy = true;
+  try {
+    await library.ready;
+    let value = library.current();
+    if (!value.queueRunning) return;
+    const next = value.queue.find(item => item.status === "pending");
+    if (!next) { await library.mutate({ type: "queueStop" }); await chrome.alarms.clear(QUEUE_ALARM); return; }
+    let tab = null;
+    if (value.queueTabId) {
+      try { tab = await chrome.tabs.get(value.queueTabId); } catch {}
+    }
+    queueStarted.delete(value.queueTabId);
+    // Record the item before navigation, so content-ready messages can be
+    // matched to the current URL rather than a previous document in the tab.
+    await library.mutate({ type: "queueState", id: next.id, status: "loading", itemId: next.id, tabId: null });
+    tab = tab ? await chrome.tabs.update(tab.id, { url: next.url, active: true }) : await chrome.tabs.create({ url: next.url, active: true });
+    await library.mutate({ type: "queueState", tabId: tab.id });
+    chrome.alarms.create(QUEUE_ALARM, { when: Date.now() + 60000 });
+    const current = await chrome.tabs.get(tab.id);
+    if (current.status === "complete") setTimeout(() => startQueuePage(tab.id), 0);
+  } finally { queueBusy = false; }
+}
+
+async function startQueuePage(tabId) {
+  await library.ready;
+  const value = library.current(); const item = value.queue.find(entry => entry.id === value.queueItemId);
+  if (!value.queueRunning || value.queueTabId !== tabId || !item || item.status !== "loading" || queueStarted.get(tabId) === item.id) return;
+  queueStarted.set(tabId, item.id);
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status !== "complete") { queueStarted.delete(tabId); return; }
+    const settings = await getSettings();
+    if (!library.current().queueRunning || library.current().queueItemId !== item.id) return;
+    readingTabId = tabId;
+    const result = await sendToTab(tabId, { target: "content", type: "START_PAGE", settings, queueItemId: item.id });
+    if (!library.current().queueRunning || library.current().queueItemId !== item.id) return;
+    if (result?.started === false) throw new Error("Bu sayfada okunacak metin bulunamadı.");
+    await library.mutate({ type: "queueState", id: item.id, status: "reading" });
+    await chrome.alarms.clear(QUEUE_ALARM);
+  } catch (error) {
+    await library.mutate({ type: "queueState", id: item.id, status: "error", error: error.message });
+    queueStarted.delete(tabId); await advanceQueue();
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === "complete") startQueuePage(tabId).catch(error => console.warn("[Sesli Oku]", error));
+});
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== QUEUE_ALARM) return;
+  library.ready.then(async () => {
+    const value = library.current();
+    if (!value.queueRunning || !value.queueItemId) return;
+    const item = value.queue.find(entry => entry.id === value.queueItemId);
+    if (item?.status !== "loading") return;
+    await library.mutate({ type: "queueState", id: item.id, status: "error", error: "Sayfa yükleme zaman aşımı." });
+    queueStarted.delete(value.queueTabId); await advanceQueue();
+  }).catch(error => console.warn("[Sesli Oku]", error));
+});
+
+async function libraryAction(message, sender) {
+  const { action, args = {} } = message;
+  const tab = sender?.tab?.id ? sender.tab : await activeTab();
+  const context = { url: sender?.tab?.id ? sender.url || tab?.url : tab?.url, title: tab?.title || "Sayfa" };
+  if (action === "context") return { context };
+  if (action === "queueAddUrl") { await library.mutate({ type: "queueAdd", url: args.url, title: args.title }); return { message: "Okuma listesine eklendi." }; }
+  if (action === "queueStart") {
+    if (library.current().queueRunning) return { message: "Okuma sırası zaten çalışıyor." };
+    await library.mutate({ type: "queueStart" }); await advanceQueue(); return { message: "Okuma sırası başlatıldı." };
+  }
+  if (action === "queueStop") {
+    const owner = library.current().queueTabId;
+    await library.mutate({ type: "queueStop" }); await chrome.alarms.clear(QUEUE_ALARM);
+    if (owner) { try { await sendToTab(owner, { target: "content", type: "STOP" }); } catch {} }
+    return { message: "Okuma sırası durduruldu." };
+  }
+  if (["queueMove", "queueRemove", "bookmarkRemove", "excludeRemove"].includes(action)) {
+    const old = library.current();
+    await library.mutate({ type: action, ...args });
+    if (action === "queueRemove" && old.queueItemId === args.id && old.queueRunning) {
+      if (old.queueTabId) { try { await sendToTab(old.queueTabId, { target: "content", type: "STOP", keepQueue: true }); } catch {} }
+      await advanceQueue();
+    }
+    return { message: "Kitaplık güncellendi." };
+  }
+  if (action === "bookmarkOpen") {
+    const item = library.current().bookmarks.find(entry => entry.id === args.id);
+    if (!item) throw new Error("Yer imi bulunamadı.");
+    if (context.url && library.pageKey(context.url) === library.pageKey(item.url) && tab?.id) return sendToTab(tab.id, { target: "content", type: "LIBRARY_ACTION", action: "resume", args: { anchor: item.anchor } });
+    const created = await chrome.tabs.create({ url: item.url, active: true });
+    await chrome.storage.session.set({ [`resume-${created.id}`]: item.anchor });
+    const opened = await chrome.tabs.get(created.id);
+    if (opened.status === "complete") { await chrome.storage.session.remove(`resume-${created.id}`); await sendToTab(created.id, { target: "content", type: "LIBRARY_ACTION", action: "resume", args: { anchor: item.anchor } }); }
+    return { message: "Yer imi yeni sekmede açılıyor." };
+  }
+  if (action === "cancelExport" && library.current().export?.tabId) return sendToTab(library.current().export.tabId, { target: "content", type: "LIBRARY_ACTION", action, args });
+  if (!tab?.id) throw new Error("Etkin sayfa bulunamadı.");
+  return sendToTab(tab.id, { target: "content", type: "LIBRARY_ACTION", action, args });
+}
 
 async function handleMessage(message, sender) {
   switch (message.type) {
+    case "LIBRARY_MUTATE": {
+      const operation = message.operation;
+      if (operation?.type === "export" && operation.value?.status === "working") operation.value.tabId = sender?.tab?.id;
+      return { library: await library.mutate(operation) };
+    }
+    case "LIBRARY_ACTION": await library.ready; return libraryAction(message, sender);
+    case "CONTENT_READY": {
+      const tabId = sender?.tab?.id;
+      if (tabId) {
+        const key = `resume-${tabId}`; const stored = await chrome.storage.session.get(key);
+        if (stored[key]) { await chrome.storage.session.remove(key); await sendToTab(tabId, { target: "content", type: "LIBRARY_ACTION", action: "resume", args: { anchor: stored[key] } }); }
+        else await startQueuePage(tabId);
+      }
+      return {};
+    }
+    case "READING_FAILED":
+    case "READING_FINISHED": {
+      tts.close();
+      const value = library.current();
+      if (value.queueRunning && value.queueTabId === sender?.tab?.id && value.queueItemId === message.queueItemId) {
+        await library.mutate({ type: "queueState", id: value.queueItemId, status: message.type === "READING_FAILED" ? "error" : "done", error: message.error, itemId: null });
+        queueStarted.delete(sender.tab.id); await advanceQueue();
+      }
+      if (sender?.tab?.id === readingTabId) readingTabId = null;
+      return {};
+    }
     case "GET_VOICES":
       return getVoices();
 
@@ -265,6 +410,7 @@ async function handleMessage(message, sender) {
     }
 
     case "STOP":
+      if (!message.keepQueue && library.current().queueTabId === sender?.tab?.id) { await library.mutate({ type: "queueStop" }); await chrome.alarms.clear(QUEUE_ALARM); }
       if (sender?.tab?.id === readingTabId) readingTabId = null;
       tts.close();
       return { stopped: true };
@@ -288,6 +434,12 @@ async function handleMessage(message, sender) {
       if (tab?.id) await sendToTab(tab.id, { target: "content", type: "STOP" });
       tts.close();
       return { stopped: true };
+    }
+
+    case "SET_SLEEP_TIMER": {
+      const tabId = readingTabId || (await activeTab())?.id;
+      if (!tabId) throw new Error("Önce okumayı başlatın.");
+      return sendToTab(tabId, { target: "content", type: "SET_SLEEP_TIMER", timer: message.timer });
     }
 
     case "SET_PLAYBACK_RATE": {

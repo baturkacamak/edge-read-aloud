@@ -35,36 +35,7 @@
       <button id="read-here" class="secondary full">İmleçten oku</button>
     </div>
 
-    <label class="check">
-      <input id="continue-selection" type="checkbox" checked />
-      <span>Seçimden sonra devam et</span>
-    </label>
-
-    <div class="field">
-      <label for="theme">Görünüm · Tema</label>
-      <select id="theme" aria-label="Görünüm teması"></select>
-    </div>
-
-    <div class="field">
-      <label for="voice">Ses</label>
-      <select id="voice"></select>
-    </div>
-
-    <div class="field">
-      <div class="label-row">
-        <label for="rate">Okuma hızı</label>
-        <output id="rate-value">0%</output>
-      </div>
-      <input id="rate" type="range" min="-50" max="100" step="5" value="0" />
-    </div>
-
-    <div class="field">
-      <div class="label-row">
-        <label for="volume">Ses düzeyi</label>
-        <output id="volume-value">0%</output>
-      </div>
-      <input id="volume" type="range" min="-50" max="50" step="5" value="0" />
-    </div>
+    <section id="preferences" aria-label="Okuma ayarları"></section>
 
     <div class="status" id="status" role="status"></div>
 
@@ -76,6 +47,8 @@
     </footer>
 
     <script src="themes.js"></script>
+    <script src="library.js"></script>
+    <script src="settings.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

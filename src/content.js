@@ -33,6 +33,8 @@
   }
 
   const themes = globalThis.SesliOkuThemes;
+  const preferences = globalThis.SesliOkuSettings;
+  const library = globalThis.SesliOkuLibrary;
   const themeHighlightStyle = document.createElement("style");
   themeHighlightStyle.id = "sesli-oku-theme-highlight";
 
@@ -40,22 +42,7 @@
     const wrap = state.host?.shadowRoot?.querySelector(".wrap");
     if (wrap) themes.apply(wrap, theme, state.host);
     if (state.ui?.theme) state.ui.theme.value = theme;
-    // Only the extension's highlight selectors are themed on the host page.
-    // All control CSS stays isolated inside the shadow root.
-    if (theme === "modern") {
-      themeHighlightStyle.remove();
-    } else {
-      const color = theme === "xp" ? "36, 94, 219" : theme === "win7" ? "36, 107, 156" : "0, 0, 128";
-      themeHighlightStyle.textContent = `
-        .edge-ra-current { background-color: rgba(${color}, .12) !important; box-shadow: 0 0 0 2px rgba(${color}, .3) !important; }
-        ::highlight(edge-ra-word) { background-color: rgb(${color}); color: #fff; text-shadow: none; }
-        #sesli-oku-spotlight, #sesli-oku-spotlight[data-theme="dark"] {
-          border-color: rgba(${color}, .5); background: rgba(${color}, .06);
-          border-radius: ${theme === "win95" || theme === "win98" ? "0" : "5px"};
-          box-shadow: 0 0 14px 4px rgba(${color}, .18);
-        }`;
-      if (!themeHighlightStyle.isConnected) document.documentElement.appendChild(themeHighlightStyle);
-    }
+    renderHighlightStyle();
     if (state.host?.isConnected) schedulePageLayout();
   }
 
@@ -68,16 +55,9 @@
     "[role='navigation'], [role='banner'], [role='contentinfo'], [role='button'], " +
     "[role='menu'], [role='dialog'], [role='complementary'], [aria-hidden='true'], " +
     "[contenteditable='true'], .sidebar, .widget-area, " +
-    "[class~='sidebar'], [id~='sidebar']";
+    "[class~='sidebar'], [id~='sidebar'], [data-sesli-oku-excluded]";
 
-  const DEFAULT_SETTINGS = {
-    voice: "tr-TR-EmelNeural",
-    rate: 0,
-    pitch: 0,
-    volume: 0,
-    playbackRate: 1,
-    continueSelection: true,
-  };
+  const DEFAULT_SETTINGS = preferences.defaults;
 
   const state = {
     chunks: [],
@@ -109,7 +89,21 @@
     autoScrollUntil: 0,
     lastManualScrollAt: 0,
     hideTimer: null,
+    sleepTimer: null,
+    sleepTimeout: null,
+    timerOwner: crypto.randomUUID(),
+    testAudioMs: 0,
+    testAudio: null,
+    testRequestDelay: 0,
+    testRequests: [],
+    testPlayed: [],
+    gapWaiting: false,
+    queueItemId: null,
+    voiceCatalog: null,
   };
+
+  const experience = globalThis.SesliOkuExperience.create({ state,
+    prepareChunks: () => buildChunks(collectBlocks()), startSession, showUi, updateUi, setStatus, toggleSettings, renderHighlightStyle, sendToBackground, stop });
 
   themes.subscribe(applyTheme);
 
@@ -122,15 +116,30 @@
     return Math.min(max, Math.max(min, Number(value) || 0));
   }
 
-  function normalizeSettings(settings = {}) {
-    return {
-      voice: settings.voice || DEFAULT_SETTINGS.voice,
-      rate: clamp(settings.rate, -50, 100),
-      pitch: clamp(settings.pitch, -50, 50),
-      volume: clamp(settings.volume, -100, 100),
-      playbackRate: clamp(settings.playbackRate || 1, 0.5, 2),
-      continueSelection: settings.continueSelection !== false,
-    };
+  const normalizeSettings = preferences.normalize;
+
+  function renderHighlightStyle() {
+    const setting = state.settings;
+    const theme = themes.current();
+    const hex = preferences.highlightColorFor(setting, theme);
+    const rgb = [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16));
+    const color = rgb.join(", ");
+    const alpha = setting.highlightOpacity / 100;
+    const glow = setting.glowIntensity / 100;
+    const word = ["both", "word"].includes(setting.highlightMode);
+    const paragraph = ["both", "paragraph"].includes(setting.highlightMode);
+    const contrast = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 > 150 ? "#111" : "#fff";
+    themeHighlightStyle.textContent = `
+      .edge-ra-current { background-color: ${paragraph ? `rgba(${color}, ${alpha})` : "transparent"} !important;
+        box-shadow: ${paragraph ? `0 0 0 2px rgba(${color}, ${alpha * .8})` : "none"} !important; }
+      ::highlight(edge-ra-word) { background-color: ${word ? `rgba(${color}, ${Math.min(1, alpha * 2)})` : "transparent"}; color: ${word && alpha >= .35 ? contrast : "inherit"}; text-shadow: none; }
+      #sesli-oku-spotlight, #sesli-oku-spotlight[data-theme="dark"] {
+        border-color: rgba(${color}, ${glow * .7}); background: rgba(${color}, ${glow * .08});
+        border-radius: ${theme === "win95" || theme === "win98" ? "0" : "7px"};
+        box-shadow: ${glow ? `0 0 ${12 + glow * 20}px ${glow * 7}px rgba(${color}, ${glow * .35})` : "none"};
+        ${!word || !glow || experience.focusOpen() ? "opacity: 0 !important;" : ""}
+      }`;
+    if (!themeHighlightStyle.isConnected) document.documentElement.appendChild(themeHighlightStyle);
   }
 
   function cleanText(value) {
@@ -194,7 +203,7 @@
 
       const innerText = cleanText(el.innerText || el.textContent);
       if (innerText.length < 25) continue;
-      if (!/[0-9A-Za-zÇĞİÖŞÜçğıöşü]/.test(innerText)) continue;
+      if (!/[\p{L}\p{N}]/u.test(innerText)) continue;
 
       // Navigation lists and topic indexes are mostly links. Reading them as
       // article text is noisy, so skip blocks whose text is mostly link text.
@@ -231,7 +240,7 @@
       // otherwise a single soft hyphen or hidden node makes word highlighting
       // silently fail. Prefer the TreeWalker map and fall back to innerText.
       const map = buildTextMap(el);
-      const text = map?.text || innerText;
+      const text = map ? map.text : innerText;
       if (text.length < 25) continue;
 
       blocks.push({ el, text, map });
@@ -298,16 +307,33 @@
     }
   }
 
-  async function requestAudio(text) {
-    const response = await sendToBackground({
-      type: "SPEAK",
-      text,
-      settings: state.settings,
-    });
-    return {
-      audio: fromBase64(response.audio),
-      boundaries: response.boundaries || [],
-    };
+  async function speechSettings(text, chunk, settings) {
+    if (!settings.autoVoice) return settings;
+    const languageNode = chunk?.el?.closest("[lang]");
+    const explicit = languageNode && languageNode !== document.documentElement ? languageNode.lang : "";
+    const language = library.detectLanguage(text, explicit, document.documentElement.lang || settings.voice);
+    const preferred = language === "tr" ? settings.turkishVoice : language === "en" ? settings.englishVoice : "";
+    if (preferred) return { ...settings, voice: preferred };
+    if (!state.voiceCatalog) {
+      try { state.voiceCatalog = (await sendToBackground({ type: "GET_VOICES" })).voices || []; } catch { state.voiceCatalog = []; }
+    }
+    const voice = state.voiceCatalog.find(item => item.Locale?.toLowerCase().startsWith(language + "-"));
+    return { ...settings, voice: voice?.ShortName || settings.voice };
+  }
+
+  async function requestAudio(text, chunk = null, override = state.settings) {
+    const settings = await speechSettings(text, chunk, override);
+    const spoken = library.pronounce(text, settings.pronunciationRules);
+    if (TEST_MODE && state.testAudio) {
+      if (state.testRequestDelay) await sleep(state.testRequestDelay);
+      state.testRequests.push({ text: spoken.text, source: text, settings: { ...settings } });
+      const words = [...spoken.text.matchAll(/\S+/gu)];
+      const boundaries = words.map((word, index) => ({ offset: Math.round(index / words.length * state.testAudioMs * 10000), duration: Math.round(state.testAudioMs * 10000 / words.length), text: word[0] }));
+      return { audio: state.testAudio, boundaries, spoken, sourceOffsets: library.mapBoundaries(spoken, boundaries), voice: settings.voice };
+    }
+    const response = await sendToBackground({ type: "SPEAK", text: spoken.text, settings });
+    const boundaries = response.boundaries || [];
+    return { audio: fromBase64(response.audio), boundaries, spoken, sourceOffsets: library.mapBoundaries(spoken, boundaries), voice: settings.voice };
   }
 
   function fromBase64(value) {
@@ -319,16 +345,16 @@
 
   function audioFor(index) {
     if (state.cache.has(index)) return state.cache.get(index);
-    const promise = requestAudio(state.chunks[index].text);
+    const promise = requestAudio(state.chunks[index].text, state.chunks[index]);
     state.cache.set(index, promise);
     return promise;
   }
 
   function prefetch(index) {
     if (index >= state.chunks.length || state.cache.has(index)) return;
-    const promise = requestAudio(state.chunks[index].text);
+    const promise = requestAudio(state.chunks[index].text, state.chunks[index]);
     state.cache.set(index, promise);
-    promise.catch(() => state.cache.delete(index));
+    promise.catch(() => { if (state.cache.get(index) === promise) state.cache.delete(index); });
   }
 
   // ---------------------------------------------------------------- player UI
@@ -409,6 +435,8 @@
       select.appendChild(option);
     }
     select.value = state.settings.voice;
+    state.ui.preferences.renderVoiceChoices(voices);
+    state.voiceCatalog = voices;
     state.voicesLoaded = true;
   }
 
@@ -428,48 +456,111 @@
   }
 
   function syncSettingsInputs() {
-    if (!state.ui) return;
-    const ui = state.ui;
-    const hasVoice = Array.from(ui.voice.options).some(
-      (option) => option.value === state.settings.voice
-    );
-    if (hasVoice) ui.voice.value = state.settings.voice;
-    ui.rate.value = String(state.settings.rate);
-    ui.volume.value = String(state.settings.volume);
-    ui.rateValue.textContent = formatPercent(state.settings.rate);
-    ui.volumeValue.textContent = formatPercent(state.settings.volume);
-  }
-
-  function saveReadingSettings() {
-    try {
-      chrome.storage.local
-        .set({ settings: { ...state.settings } })
-        .catch(() => {});
-    } catch {
-      // Orphaned content script: storage is no longer reachable.
-    }
+    state.ui?.preferences.sync(state.settings);
   }
 
   function applyReadingSettings(patch) {
-    state.settings = normalizeSettings({ ...state.settings, ...patch });
-    syncSettingsInputs();
-    saveReadingSettings();
-    state.cache.clear();
-    if (!state.playing) return;
+    return preferences.update(patch).catch(error => setStatus(error.message, true));
+  }
 
-    // Apply the new voice/rate immediately, but keep the user's manual scroll
-    // pause and pause state intact.
-    const wasPaused = state.paused;
-    const followReading = state.followReading;
-    const lastManualScrollAt = state.lastManualScrollAt;
-    startSession(state.index);
-    state.followReading = followReading;
-    state.lastManualScrollAt = lastManualScrollAt;
-    if (wasPaused) {
-      state.paused = true;
-      state.audio?.pause();
-      updateUi();
+  function receiveSettings(next) {
+    const previous = state.settings;
+    if (JSON.stringify(previous) === JSON.stringify(next)) return;
+    state.settings = next;
+    syncSettingsInputs();
+    renderHighlightStyle();
+    if (previous.autoFollow !== next.autoFollow) {
+      state.followReading = next.autoFollow;
+      state.lastManualScrollAt = next.autoFollow ? 0 : performance.now();
     }
+    if (state.audio) state.audio.playbackRate = next.playbackRate;
+    experience.invalidate();
+    const speechChanged = ["voice", "rate", "pitch", "volume", "autoVoice", "turkishVoice", "englishVoice", "pronunciationRules"].some(key => JSON.stringify(previous[key]) !== JSON.stringify(next[key]));
+    if (speechChanged) {
+      state.cache.clear();
+      if (state.playing) {
+        const wasPaused = state.paused;
+        const follow = state.followReading;
+        const lastScroll = state.lastManualScrollAt;
+        startSession(state.index);
+        state.followReading = follow;
+        state.lastManualScrollAt = lastScroll;
+        if (wasPaused) { state.paused = true; state.audio?.pause(); }
+      }
+    }
+    updateUi();
+  }
+
+  function publishSleepTimer() {
+    const value = state.sleepTimer ? { mode: state.sleepTimer.mode, deadline: state.sleepTimer.deadline || null, owner: state.timerOwner } : null;
+    chrome.storage.local.get("readingTimer").then(stored => {
+      if (value || stored.readingTimer?.owner === state.timerOwner) return chrome.storage.local.set({ readingTimer: value });
+    }).catch(() => {});
+    state.ui?.preferences.syncTimer(value);
+    updateSleepStatus();
+  }
+
+  function configureSleepTimer(timer) {
+    if (!state.playing && timer.mode !== "off") throw new Error("Önce okumayı başlatın.");
+    if (!["off", "paragraph"].includes(timer.mode)) {
+      const minutes = timer.mode === "custom" ? Number(timer.minutes) : Number(timer.mode);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 180) throw new Error("Süre 1–180 dakika olmalıdır.");
+    }
+    clearTimeout(state.sleepTimeout);
+    state.sleepTimeout = null;
+    if (timer.mode === "off") state.sleepTimer = null;
+    else if (timer.mode === "paragraph") state.sleepTimer = { mode: "paragraph", endElement: state.chunks[state.index]?.el };
+    else {
+      const minutes = timer.mode === "custom" ? Number(timer.minutes) : Number(timer.mode);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 180) throw new Error("Süre 1–180 dakika olmalıdır.");
+      state.sleepTimer = { mode: "time", deadline: Date.now() + minutes * 60000 };
+      armSleepTimeout();
+    }
+    publishSleepTimer();
+  }
+
+  function armSleepTimeout() {
+    if (!state.sleepTimer?.deadline) return;
+    state.sleepTimeout = setTimeout(() => { if (!checkSleepDeadline()) armSleepTimeout(); }, Math.max(0, state.sleepTimer.deadline - Date.now()));
+  }
+
+  function checkSleepDeadline() {
+    if (!state.sleepTimer?.deadline || Date.now() < state.sleepTimer.deadline) return false;
+    stop();
+    setStatus("Zamanlayıcı: okuma durduruldu");
+    return true;
+  }
+
+  function updateSleepStatus() {
+    if (!state.ui?.sleepStatus) return;
+    const timer = state.sleepTimer;
+    state.ui.sleepStatus.hidden = !timer;
+    if (!timer) return;
+    if (timer.mode === "paragraph") state.ui.sleepStatus.textContent = "⏱ Paragraf sonu";
+    else {
+      const seconds = Math.max(0, Math.ceil((timer.deadline - Date.now()) / 1000));
+      state.ui.sleepStatus.textContent = `⏱ ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    }
+  }
+
+  function atParagraphEnd(index) {
+    const current = state.chunks[index];
+    const next = state.chunks[index + 1];
+    return !next || !current?.el || current.el !== next.el;
+  }
+
+  async function waitParagraphGap(session) {
+    let elapsed = 0;
+    state.gapWaiting = true;
+    try {
+      while (elapsed < state.settings.paragraphDelay && session === state.session && state.playing) {
+        if (checkSleepDeadline()) return;
+        await waitWhilePaused(session);
+        const started = performance.now();
+        await sleep(Math.min(50, state.settings.paragraphDelay - elapsed));
+        if (!state.paused) elapsed += performance.now() - started;
+      }
+    } finally { state.gapWaiting = false; }
   }
 
   let layoutFrame = null;
@@ -614,6 +705,7 @@
         ? force
         : !state.ui.settings.classList.contains("open");
     changePlayerLayout(() => {
+      if (!open) state.ui.preferences.closeDropdowns();
       state.ui.settings.classList.toggle("open", open);
     });
     syncPageLayout();
@@ -845,6 +937,7 @@
           <span class="divider" aria-hidden="true"></span>
           <span class="status">Hazır</span>
           <div class="player-tools">
+          <span class="sleep-status" hidden></span>
           <button data-act="follow" class="follow" title="Okumaya dön">Okumaya dön</button>
           <div class="actions">
           <button data-act="speed" class="speed" title="Oynatma hızı">1.0×</button>
@@ -853,36 +946,16 @@
           </div>
           </div>
         </div>
-        <div id="sesli-oku-settings" class="settings" role="region" aria-label="Okuma ayarları">
-          <div class="field">
-            <label for="sesli-oku-voice">Ses</label>
-            <select id="sesli-oku-voice"><option>Yükleniyor…</option></select>
-          </div>
-          <div class="field">
-            <div class="label-row">
-              <label for="sesli-oku-rate">Okuma hızı</label>
-              <output id="sesli-oku-rate-value">0%</output>
-            </div>
-            <input id="sesli-oku-rate" type="range" min="-50" max="100" step="5" value="0" />
-          </div>
-          <div class="field">
-            <div class="label-row">
-              <label for="sesli-oku-volume">Ses düzeyi</label>
-              <output id="sesli-oku-volume-value">0%</output>
-            </div>
-            <input id="sesli-oku-volume" type="range" min="-50" max="50" step="5" value="0" />
-          </div>
-        </div>
+        <div id="sesli-oku-settings" class="settings" role="region" aria-label="Okuma ayarları"></div>
       </div>`;
 
     const themeStyle = document.createElement("style");
-    themeStyle.textContent = themes.css;
+    themeStyle.textContent = themes.css + preferences.css + library.css;
     shadow.appendChild(themeStyle);
-    const themeField = document.createElement("div");
-    themeField.className = "field theme-field";
-    themeField.innerHTML = '<label for="sesli-oku-theme">Görünüm · Tema</label><select id="sesli-oku-theme" aria-label="Görünüm teması"></select>';
-    shadow.querySelector(".settings").prepend(themeField);
-    themes.fillSelect(themeField.querySelector("select"));
+    state.ui?.preferences?.dispose();
+    const settingsUi = preferences.mount(shadow.querySelector(".settings"), {
+      prefix: "sesli-oku-", onTimer: configureSleepTimer, onLayout: schedulePageLayout,
+    });
     shadow.querySelector(".wrap").dataset.theme = themes.current();
 
     const ui = {
@@ -892,7 +965,9 @@
       follow: shadow.querySelector("[data-act='follow']"),
       settingsButton: shadow.querySelector("[data-act='settings']"),
       settings: shadow.querySelector(".settings"),
-      theme: shadow.querySelector("#sesli-oku-theme"),
+      preferences: settingsUi,
+      sleepStatus: shadow.querySelector(".sleep-status"),
+      theme: settingsUi.theme,
       voice: shadow.querySelector("#sesli-oku-voice"),
       rate: shadow.querySelector("#sesli-oku-rate"),
       rateValue: shadow.querySelector("#sesli-oku-rate-value"),
@@ -913,32 +988,10 @@
       else if (action === "close") stop();
     });
 
-    shadow.addEventListener("input", (event) => {
-      if (event.target === ui.rate) {
-        ui.rateValue.textContent = formatPercent(ui.rate.value);
-      } else if (event.target === ui.volume) {
-        ui.volumeValue.textContent = formatPercent(ui.volume.value);
-      }
-    });
-
-    shadow.addEventListener("change", (event) => {
-      if (event.target === ui.theme) {
-        themes.set(ui.theme.value).catch(error => {
-          ui.theme.value = themes.current();
-          setStatus(error.message, true);
-        });
-      } else if (event.target === ui.voice) {
-        applyReadingSettings({ voice: ui.voice.value });
-      } else if (event.target === ui.rate) {
-        applyReadingSettings({ rate: Number(ui.rate.value) });
-      } else if (event.target === ui.volume) {
-        applyReadingSettings({ volume: Number(ui.volume.value) });
-      }
-    });
-
     document.documentElement.appendChild(host);
     state.host = host;
     state.ui = ui;
+    experience.mount(shadow);
     host.showPopover();
     observePageLayout();
     syncSettingsInputs();
@@ -978,6 +1031,8 @@
     }
 
     const ui = state.ui;
+    updateSleepStatus();
+    experience.updateProgress();
     ui.toggle.textContent = state.paused ? "▶" : state.playing ? "❚❚" : "▶";
     ui.speed.textContent = `${state.settings.playbackRate.toFixed(2).replace(/0$/, "")}×`;
     if (ui.follow) {
@@ -1030,7 +1085,7 @@
 
   const WORD_HIGHLIGHT = "edge-ra-word";
   const TEXT_SKIP_SELECTOR =
-    "script, style, noscript, template, [aria-hidden='true']";
+    "script, style, noscript, template, [aria-hidden='true'], [data-sesli-oku-excluded]";
 
   function supportsWordHighlight() {
     return (
@@ -1150,7 +1205,9 @@
     // If the user scrolled back to the current word and paused interacting,
     // resume following automatically.
     if (
+      !snap &&
       !state.followReading &&
+      state.settings.autoFollow &&
       state.playing &&
       performance.now() - state.lastManualScrollAt > 900 &&
       rect.top >= view.top &&
@@ -1166,21 +1223,29 @@
     // Scroll slightly ahead of the animation and place the box at the final
     // viewport position while the page glides there. This prevents the scroll
     // handler from interrupting the arrival animation.
-    const topMargin = view.top + 12;
-    const bottomMargin = view.bottom - 16;
+    // Both edges are viewport coordinates. Do not subtract bottom from the
+    // window height: a tall settings panel can then invert the reading area
+    // and make successive words alternate between opposing scroll targets.
+    const availableHeight = view.bottom - view.top;
+    const margin = Math.min(12, Math.max(0, (availableHeight - rect.height) / 4));
+    const topMargin = view.top + margin;
+    const bottomMargin = view.bottom - margin;
     let target = rect;
     if (
       !snap &&
       autoScroll &&
+      state.settings.autoFollow &&
       state.followReading &&
+      !experience.focusOpen() &&
+      availableHeight >= rect.height + 2 &&
       range !== state.spotlightScrollRange
     ) {
       state.spotlightScrollRange = range;
       let delta = 0;
-      if (rect.top < topMargin) {
+      if (rect.top < topMargin - 2) {
         delta = rect.top - topMargin;
-      } else if (rect.bottom > window.innerHeight - bottomMargin) {
-        delta = rect.bottom - (window.innerHeight - bottomMargin);
+      } else if (rect.bottom > bottomMargin + 2) {
+        delta = rect.bottom - bottomMargin;
       }
       if (delta) {
         state.autoScrollUntil = performance.now() + 2000;
@@ -1313,12 +1378,13 @@
 
   function getViewportInsets(force = false) {
     const now = performance.now();
-    if (!force && now - viewportInsets.at < 700) return viewportInsets;
+    const toolbarBottom = state.host?.style.display !== "none"
+      ? (state.host?.getBoundingClientRect().bottom || 0) : 0;
+    if (!force && now - viewportInsets.at < 700 && viewportInsets.toolbarBottom === toolbarBottom) return viewportInsets;
 
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    let top = Math.max(96, state.host?.style.display !== "none"
-      ? (state.host?.getBoundingClientRect().bottom || 0) + 8 : 0);
+    let top = Math.max(96, toolbarBottom + 8);
     let bottom = 120;
 
     for (const x of [vw * 0.5, vw * 0.2, vw * 0.8]) {
@@ -1332,10 +1398,13 @@
     }
 
     for (const x of [vw * 0.5, vw * 0.2, vw * 0.8]) {
-      for (const y of [1, 40, 100]) {
+      // Site headers (including WordPress' admin bar) start below our player,
+      // so probing only the window's original top edge misses them entirely.
+      for (const y of [toolbarBottom + 1, top + 1, top + 40]) {
+        if (y >= vh) continue;
         const rect = fixedOverlayAt(x, y);
         if (!rect) continue;
-        if (rect.top < 40 && rect.bottom < vh * 0.55) {
+        if (rect.top <= top + 8 && rect.bottom > top) {
           top = Math.max(top, rect.bottom + 8);
         }
       }
@@ -1343,6 +1412,7 @@
 
     viewportInsets = {
       at: now,
+      toolbarBottom,
       top: Math.min(top, vh - 32),
       bottom: Math.min(bottom, Math.round(vh * 0.55)),
     };
@@ -1401,8 +1471,10 @@
     const safeBottom = Math.min(bottom, window.innerHeight - insets.bottom);
     return {
       container,
-      top: Math.min(safeTop, safeBottom - 24),
-      bottom: Math.max(safeBottom, safeTop + 24),
+      // Keep the real edges even when panels leave no room. Callers must
+      // skip following instead of inventing a visible area behind the UI.
+      top: safeTop,
+      bottom: Math.max(safeTop, safeBottom),
       offsetTop,
       offsetLeft,
     };
@@ -1410,6 +1482,7 @@
 
   function scrollReading(container, delta, behavior) {
     if (!delta) return;
+    if (state.settings.scrollBehavior === "instant") behavior = "instant";
     if (container) {
       container.scrollBy({ top: delta, behavior });
     } else {
@@ -1439,7 +1512,9 @@
 
   let scrollSnapFrame = null;
 
-  function onScroll() {
+  function onScroll(event) {
+    if (event && isPlayerTarget(event.target)) return;
+    viewportInsets.at = 0;
     if (!state.playing) return;
     if (performance.now() < state.autoScrollUntil) return;
 
@@ -1459,6 +1534,8 @@
   }
 
   function resumeFollow() {
+    if (experience.focusOpen()) { experience.resumeFocus(); return; }
+    if (!state.settings.autoFollow) applyReadingSettings({ autoFollow: true });
     state.followReading = true;
     state.lastManualScrollAt = 0;
     state.autoScrollUntil = performance.now() + 2000;
@@ -1482,6 +1559,7 @@
     // is technically inside the viewport. This also lifts it above large
     // in-page panels at the bottom and out of inner scroll containers.
     const view = getReadingViewport(anchorElement);
+    if (view.bottom - view.top < rect.height + 2) return;
     const anchorMin = view.top + 12;
     const anchorMax = Math.max(anchorMin, view.bottom - rect.height - 16);
     const preferred = Math.round(view.top + (view.bottom - view.top) * 0.32);
@@ -1654,67 +1732,19 @@
     }
   }
 
-  function buildWordRanges(chunk, boundaries) {
-    if (!supportsWordHighlight() || !chunk?.el || !boundaries?.length) {
-      return null;
-    }
-
-    const map = chunk.map || buildTextMap(chunk.el);
-    if (!map) return null;
-
-    const chunkText = chunk.text || "";
+  function buildWordRanges(chunk, boundaries, sourceOffsets) {
+    if (!supportsWordHighlight() || !chunk?.el || !boundaries?.length) return null;
+    const map = chunk.map || buildTextMap(chunk.el); if (!map) return null;
     let base = typeof chunk.offset === "number" ? chunk.offset : -1;
-    if (
-      base < 0 ||
-      map.text.slice(base, base + chunkText.length) !== chunkText
-    ) {
-      base = map.text.indexOf(chunkText);
-    }
-
-    // If the exact chunk cannot be located, at least anchor to its first word
-    // so the rest of the paragraph can still be highlighted word by word.
-    let haystack = chunkText;
-    if (base < 0) {
-      const firstWord = (boundaries[0]?.text || "").trim();
-      const found = firstWord ? findWord(map.text, firstWord) : null;
-      if (!found) return null;
-      base = found.index;
-      haystack = map.text.slice(base);
-    }
-
-    const ranges = [];
-    let cursor = 0;
-    for (const boundary of boundaries) {
-      const word = (boundary.text || "").trim();
-      if (!word) {
-        ranges.push(null);
-        continue;
-      }
-      const found = findWord(haystack, word, cursor);
-      if (!found) {
-        ranges.push(null);
-        continue;
-      }
-      cursor = found.index + found.length;
-
-      const start = base + found.index;
-      const end = start + found.length;
-      const first = map.positions[start];
-      const last = map.positions[end - 1];
-      if (!first || !last) {
-        ranges.push(null);
-        continue;
-      }
-      try {
-        const range = document.createRange();
-        range.setStart(first.node, first.offset);
-        range.setEnd(last.node, last.offset + 1);
-        ranges.push(range);
-      } catch {
-        ranges.push(null);
-      }
-    }
-    return ranges;
+    if (base < 0 || map.text.slice(base, base + chunk.text.length) !== chunk.text) base = map.text.indexOf(chunk.text);
+    if (base < 0) return null;
+    const offsets = sourceOffsets || library.mapBoundaries(library.pronounce(chunk.text), boundaries);
+    return offsets.map(offset => {
+      if (!offset) return null;
+      const first = map.positions[base + offset.start]; const last = map.positions[base + offset.end - 1];
+      if (!first || !last) return null;
+      try { const range = document.createRange(); range.setStart(first.node, first.offset); range.setEnd(last.node, last.offset + 1); return range; } catch { return null; }
+    });
   }
 
   // ---------------------------------------------------------------- playback
@@ -1722,12 +1752,13 @@
   function playResult(result, session, chunk) {
     return new Promise((resolve) => {
       if (session !== state.session) return resolve();
+      if (TEST_MODE && state.testAudio) state.testPlayed.push({ id: chunk.el?.id, at: performance.now() });
 
       const blob = new Blob([result.audio], { type: "audio/mpeg" });
       const url = URL.createObjectURL(blob);
       const audio = new Audio();
       const boundaries = result.boundaries || [];
-      const wordRanges = buildWordRanges(chunk, boundaries);
+      const wordRanges = buildWordRanges(chunk, boundaries, result.sourceOffsets);
       let wordHighlight = null;
 
       if (wordRanges && supportsWordHighlight()) {
@@ -1742,12 +1773,16 @@
       let boundaryIndex = 0;
 
       state.audio = audio;
+      experience.audioStarted();
       state.audios.add(audio);
 
       const onTimeUpdate = () => {
-        if (session !== state.session || !state.playing) return;
+        if (session !== state.session || !state.playing || checkSleepDeadline()) return;
+        experience.updateProgress();
+        experience.save();
         if (!boundaries.length) return;
         const ticks = audio.currentTime * 1e7;
+        if (boundaries[boundaryIndex]?.offset > ticks) boundaryIndex = 0;
         while (
           boundaryIndex + 1 < boundaries.length &&
           boundaries[boundaryIndex + 1].offset <= ticks
@@ -1755,6 +1790,7 @@
           boundaryIndex++;
         }
 
+        experience.spokenWord(result, boundaryIndex);
         if (wordHighlight && wordRanges) {
           wordHighlight.clear();
           const range = wordRanges[boundaryIndex];
@@ -1776,20 +1812,23 @@
         audio.onended = null;
         audio.onerror = null;
         audio.ontimeupdate = null;
+        audio.onloadedmetadata = null;
         URL.revokeObjectURL(url);
         state.audios.delete(audio);
         if (session === state.session) clearWordHighlight();
         resolve(value?.blocked ? { blocked: true } : {});
       };
 
+      audio.onloadedmetadata = () => { if (session === state.session) { experience.metadata(audio, result); onTimeUpdate(); } };
       audio.onended = finish;
       audio.onerror = finish;
       audio.ontimeupdate = onTimeUpdate;
       audio.playbackRate = state.settings.playbackRate;
 
       audio.src = url;
-      onTimeUpdate();
       audio.play().catch((error) => {
+        // Pausing while play() is still pending cancels that request, not the paragraph.
+        if (error?.name === "AbortError" && state.paused && session === state.session) return;
         console.warn(
           "[Sesli Oku] audio.play() failed:",
           error?.name,
@@ -1805,7 +1844,7 @@
       });
 
       guard = setInterval(() => {
-        if (session !== state.session) {
+        if (checkSleepDeadline() || session !== state.session) {
           audio.pause();
           finish();
           return;
@@ -1831,6 +1870,7 @@
       session === state.session &&
       state.index < state.chunks.length
     ) {
+      if (checkSleepDeadline()) return;
       const index = state.index;
       const chunk = state.chunks[index];
 
@@ -1844,8 +1884,12 @@
       } catch (error) {
         if (session !== state.session) return;
         setStatus(error.message || "Ses üretilemedi", true);
+        if (state.queueItemId) sendToBackground({ type: "READING_FAILED", queueItemId: state.queueItemId, error: error.message }).catch(() => {});
         state.playing = false;
         state.paused = false;
+        clearTimeout(state.sleepTimeout);
+        state.sleepTimer = null;
+        publishSleepTimer();
         clearHighlight();
         updateUi();
         hideUiSoon(5000);
@@ -1869,7 +1913,13 @@
         updateUi();
         return;
       }
+      const paragraphEnd = atParagraphEnd(index);
+      if (paragraphEnd && state.sleepTimer?.mode === "paragraph" &&
+          (!state.sleepTimer.endElement || state.sleepTimer.endElement === chunk.el)) {
+        stop(); setStatus("Paragraf tamamlandı"); return;
+      }
       state.index++;
+      if (paragraphEnd && state.index < state.chunks.length) await waitParagraphGap(session);
     }
 
     if (session === state.session) {
@@ -1877,12 +1927,16 @@
       state.paused = false;
       clearHighlight();
       updateUi();
+      clearTimeout(state.sleepTimeout);
+      state.sleepTimer = null;
+      publishSleepTimer();
       hideUiSoon(2200);
-      sendToBackground({ type: "STOP" }).catch(() => {});
+      experience.save(true, true);
+      sendToBackground({ type: "READING_FINISHED", queueItemId: state.queueItemId }).catch(() => {});
     }
   }
 
-  function startSession(index) {
+  function startSession(index, options = {}) {
     state.session++;
     for (const audio of state.audios) audio.pause();
     if (state.audio) {
@@ -1891,9 +1945,11 @@
     }
     const session = state.session;
     state.index = index;
+    experience.beforeSession(index, options);
+    if (state.sleepTimer?.mode === "paragraph") state.sleepTimer.endElement = state.chunks[index]?.el;
     state.playing = true;
-    state.paused = false;
-    state.followReading = true;
+    state.paused = !!options.paused;
+    state.followReading = state.settings.autoFollow;
     state.autoScrollUntil = 0;
     state.lastManualScrollAt = 0;
 
@@ -1930,6 +1986,7 @@
     }
 
     state.paused = !state.paused;
+    experience.save(true);
     if (state.audio) {
       if (state.paused) state.audio.pause();
       else state.audio.play().catch(() => {});
@@ -1950,12 +2007,15 @@
     const rates = [0.75, 1, 1.25, 1.5, 1.75, 2];
     const current = state.settings.playbackRate;
     const next = rates[(rates.indexOf(current) + 1) % rates.length] || 1;
-    state.settings.playbackRate = next;
-    if (state.audio) state.audio.playbackRate = next;
-    updateUi();
+    applyReadingSettings({ playbackRate: next });
   }
 
-  function stop() {
+  function stop(keepQueue = false) {
+    experience.stopped();
+    clearTimeout(state.sleepTimeout);
+    state.sleepTimeout = null;
+    state.sleepTimer = null;
+    publishSleepTimer();
     state.session++;
     state.playing = false;
     state.paused = false;
@@ -1978,7 +2038,7 @@
     updateUi();
     toggleSettings(false);
     hideUiSoon(600);
-    sendToBackground({ type: "STOP" }).catch(() => {});
+    sendToBackground({ type: "STOP", keepQueue }).catch(() => {});
   }
 
   // ---------------------------------------------------------- read from here
@@ -2110,7 +2170,7 @@
   }
 
   function startFromCursor(settings, fromPoint = false) {
-    state.settings = normalizeSettings(settings);
+    state.settings = normalizeSettings({ ...preferences.current(), ...settings });
     const target = resolveCaretTarget(fromPoint);
     if (!target) {
       showUi();
@@ -2195,8 +2255,9 @@
 
   // ------------------------------------------------------------------- start
 
-  function startPage(settings) {
-    state.settings = normalizeSettings(settings);
+  function startPage(settings, options = {}) {
+    state.queueItemId = options.queueItemId || null;
+    state.settings = normalizeSettings({ ...preferences.current(), ...settings });
     const blocks = collectBlocks();
     const chunks = buildChunks(blocks);
     if (!chunks.length) {
@@ -2205,14 +2266,16 @@
       showUi();
       setStatus("Okunacak metin bulunamadı", true);
       hideUiSoon(3500);
-      return;
+      return false;
     }
     state.chunks = chunks;
     startSession(0);
+    return true;
   }
 
   function startSelection(settings, providedText) {
-    state.settings = normalizeSettings(settings);
+    state.queueItemId = null;
+    state.settings = normalizeSettings({ ...preferences.current(), ...settings });
 
     const selection = window.getSelection();
     const hasRange =
@@ -2285,6 +2348,7 @@
   document.addEventListener(
     "keydown",
     (event) => {
+      if (isPlayerTarget(event.target)) return;
       if (
         event.target instanceof Element &&
         event.target.closest(
@@ -2311,6 +2375,7 @@
     "mousedown",
     (event) => {
       // A drag on the classic scrollbar has no wheel/touch event.
+      if (isPlayerTarget(event.target)) return;
       if (event.clientX >= document.documentElement.clientWidth - 18) {
         markManualScroll();
       }
@@ -2330,6 +2395,55 @@
     true
   );
 
+  // Capture the text caret before outside-click handling collapses settings
+  // and moves the document under the pointer. Only actual text glyphs count.
+  const CLICK_CONTROL = "a, button, input, select, textarea, label, summary, audio, video, [contenteditable]:not([contenteditable='false']), [role='link'], [role='button'], [role='checkbox'], [role='switch'], [role='slider'], [role='textbox'], [role='combobox'], [role='tab'], #sesli-oku-host";
+  let readingClick = null;
+  document.addEventListener("mousedown", event => {
+    readingClick = null;
+    if (!state.playing || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+        !(event.target instanceof Element) || event.target.closest(`${CLICK_CONTROL}, ${SKIP_SELECTOR}`)) return;
+    const caret = caretRangeFromPoint(event.clientX, event.clientY);
+    const node = caret?.startContainer;
+    if (node?.nodeType !== Node.TEXT_NODE || !event.target.contains(node)) return;
+    for (const offset of [caret.startOffset, caret.startOffset - 1]) {
+      if (offset < 0 || offset >= node.length || /\s/u.test(node.data[offset])) continue;
+      const glyph = document.createRange(); glyph.setStart(node, offset); glyph.setEnd(node, offset + 1);
+      const hit = [...glyph.getClientRects()].some(rect => event.clientX >= rect.left - 1 && event.clientX <= rect.right + 1 && event.clientY >= rect.top && event.clientY <= rect.bottom);
+      if (!hit) continue;
+      glyph.collapse(true);
+      readingClick = { range: glyph, element: event.target, x: event.clientX, y: event.clientY, session: state.session };
+      break;
+    }
+  }, true);
+
+  document.addEventListener("click", event => {
+    const click = readingClick; readingClick = null;
+    if (!click || !event.isTrusted || event.defaultPrevented || !state.playing || click.session !== state.session ||
+        event.button !== 0 || event.detail > 1 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+        (event.pointerType && event.pointerType !== "mouse") || !click.range.startContainer.isConnected ||
+        Math.hypot(event.clientX - click.x, event.clientY - click.y) > 6 || !window.getSelection()?.isCollapsed ||
+        click.element.closest(`${CLICK_CONTROL}, ${SKIP_SELECTOR}`)) return;
+    const node = click.range.startContainer;
+    const locate = chunks => {
+      for (let index = 0; index < chunks.length; index++) {
+        const chunk = chunks[index]; if (!chunk.el?.contains(node)) continue;
+        const map = chunk.map || buildTextMap(chunk.el); if (!map) continue;
+        let offset = caretIndex(map, click.range);
+        const begin = chunk.offset || 0;
+        if (offset < begin || offset >= begin + chunk.text.length) continue;
+        while (offset > begin && /[\p{L}\p{N}\p{M}'’_-]/u.test(map.text[offset - 1])) offset--;
+        return { index, charOffset: offset - begin };
+      }
+      return null;
+    };
+    let chunks = state.chunks; let target = locate(chunks);
+    if (!target) { chunks = buildChunks(collectBlocks()); target = locate(chunks); }
+    if (!target) return;
+    state.chunks = chunks;
+    startSession(target.index, { anchor: { charOffset: target.charOffset, seconds: 0 } });
+  });
+
   // Close the on-page settings panel when clicking anywhere outside the bar.
   document.addEventListener(
     "mousedown",
@@ -2347,8 +2461,49 @@
 
 
 
+  experience.initialize();
+  preferences.subscribe(receiveSettings);
+  library.ready.then(() => sendToBackground({ type: "CONTENT_READY" })).catch(() => {});
+  setInterval(() => {
+    if (state.sleepTimer) { checkSleepDeadline(); updateSleepStatus(); }
+  }, 1000);
+
   if (TEST_MODE) {
     window.__sesliOkuTest = {
+      syntheticAudio: (duration = 150) => {
+        const frames = Math.round(8000 * duration / 1000);
+        const buffer = new ArrayBuffer(44 + frames * 2);
+        const view = new DataView(buffer);
+        const ascii = (offset, text) => [...text].forEach((char, index) => view.setUint8(offset + index, char.charCodeAt(0)));
+        ascii(0, "RIFF"); view.setUint32(4, 36 + frames * 2, true); ascii(8, "WAVE"); ascii(12, "fmt ");
+        view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+        view.setUint32(24, 8000, true); view.setUint32(28, 16000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+        ascii(36, "data"); view.setUint32(40, frames * 2, true);
+        state.testAudio = new Uint8Array(buffer); state.testAudioMs = duration;
+        state.testRequests = []; state.testPlayed = [];
+      },
+      startBlocks: (selectors, settings = {}) => {
+        state.settings = normalizeSettings({ ...preferences.current(), ...settings });
+        state.chunks = buildChunks(selectors.map(selector => {
+          const el = document.querySelector(selector);
+          return { el, text: cleanText(el.innerText) };
+        }));
+        startSession(0);
+      },
+      playback: () => togglePlayback(),
+      timer: timer => configureSleepTimer(timer),
+      deadline: ms => {
+        configureSleepTimer({ mode: "custom", minutes: 1 });
+        clearTimeout(state.sleepTimeout); state.sleepTimer.deadline = Date.now() + ms;
+        armSleepTimeout(); publishSleepTimer();
+      },
+      experience: () => experience.debug(),
+      seekBy: seconds => experience.seekBy(seconds),
+      seekTo: seconds => experience.seekTo(seconds),
+      libraryAction: (action, args = {}) => experience.perform(action, args, requestAudio),
+      savePosition: () => experience.save(true),
+      requestDelay: ms => { state.testRequestDelay = ms; },
+      audioData: base64 => { state.testAudio = fromBase64(base64); state.testAudioMs = 1000; },
       start: (settings = {}) => startPage(settings),
       stop: () => stop(),
       pause: () => {
@@ -2380,6 +2535,14 @@
         const wordRect = range ? range.getBoundingClientRect() : null;
         const spotRect = state.spotlight?.getBoundingClientRect() || null;
         return {
+          wordText: range?.toString() || "",
+          chunks: state.chunks.map(chunk => ({ id: chunk.el?.id, text: chunk.text })),
+          settings: { ...state.settings },
+          sleepTimer: state.sleepTimer ? { mode: state.sleepTimer.mode, deadline: state.sleepTimer.deadline } : null,
+          gapWaiting: state.gapWaiting,
+          testRequests: state.testRequests,
+          testPlayed: state.testPlayed,
+          status: state.ui?.status.textContent,
           theme: themes.current(),
           session: state.session,
           playing: state.playing,
@@ -2472,6 +2635,8 @@
     };
   }
 
+  if (TEST_MODE && new URL(location.href).searchParams.has("sesliOkuAudio")) window.__sesliOkuTest.syntheticAudio(Number(new URL(location.href).searchParams.get("sesliOkuAudio")) || 150);
+
   // ---------------------------------------------------------------- messages
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -2482,18 +2647,32 @@
       return false;
     }
 
+    if (message.type === "LIBRARY_ACTION") {
+      library.ready.then(() => experience.perform(message.action, message.args, requestAudio)).then(
+        value => sendResponse({ ok: true, ...value }), error => sendResponse({ ok: false, error: error.message })
+      );
+      return true;
+    }
+    if (["START_PAGE", "START_SELECTION", "START_FROM_CURSOR"].includes(message.type) && !library.isReady()) {
+      library.ready.then(() => {
+        if (message.type === "START_PAGE") return startPage(message.settings, { queueItemId: message.queueItemId });
+        if (message.type === "START_SELECTION") return startSelection(message.settings, message.text);
+        return startFromCursor(message.settings, message.fromPoint === true);
+      }).then(started => sendResponse({ ok: true, started }), error => sendResponse({ ok: false, error: error.message }));
+      return true;
+    }
+
     try {
-      if (message.type === "START_PAGE") startPage(message.settings);
+      if (message.type === "START_PAGE") { const started = startPage(message.settings, { queueItemId: message.queueItemId }); sendResponse({ ok: true, started: !!started }); return false; }
       else if (message.type === "START_SELECTION") {
         startSelection(message.settings, message.text);
       } else if (message.type === "START_FROM_CURSOR") {
         startFromCursor(message.settings, message.fromPoint === true);
-      } else if (message.type === "TOGGLE") togglePlayback();
-      else if (message.type === "STOP") stop();
+      } else if (message.type === "SET_SLEEP_TIMER") configureSleepTimer(message.timer);
+      else if (message.type === "TOGGLE") togglePlayback();
+      else if (message.type === "STOP") stop(message.keepQueue);
       else if (message.type === "SET_PLAYBACK_RATE") {
-        state.settings.playbackRate = clamp(message.playbackRate, 0.5, 2);
-        if (state.audio) state.audio.playbackRate = state.settings.playbackRate;
-        updateUi();
+        applyReadingSettings({ playbackRate: clamp(message.playbackRate, 0.5, 2) });
       } else {
         throw new Error(`Bilinmeyen mesaj: ${message.type}`);
       }

@@ -132,6 +132,83 @@ ayrılan alan büyür ve içerik aşağı itilir; kapanınca alan geri verilir.
 Değişiklikler anında uygulanır ve popup ile aynı `chrome.storage.local`
 kaydına yazılır.
 
+Okuma sürerken sayfadaki bir kelimeye **sol tıklamak**, okumayı doğrudan o
+kelimeden devam ettirir. Duraklatılmış okuma da bu şekilde devam ettirilebilir.
+Bağlantılar, düğmeler, düzenlenebilir alanlar ve hariç tutulan bölgeler kendi
+işlevlerini korur; metni sürükleyerek seçmek veya boşluğa tıklamak okuma konumunu değiştirmez.
+Ayarlar tıklamayla kapandığında sayfa yer değiştirse bile başlangıçta tıklanan
+kelime kullanılır.
+
+### Okuma, görünüm ve davranış ayarları
+
+Üst çubuğun ⚙ paneli ve popup aynı **Okuma · Görünüm · Davranış · Kitaplık** sekmelerini
+kullanır. Ayarlar yerel olarak kaydedilir ve açık arayüzler arasında eşzamanlanır.
+
+| Sekme | Ayarlar |
+| --- | --- |
+| **Okuma** | Ses, okuma hızı, ses perdesi (−50…+50 Hz), ses düzeyi, oynatma hızı (0.5×–2×), seçimden sonra devam etme |
+| **Görünüm** | Beş tema, kelime/paragraf/ikisi/kapalı vurgu, tema rengi veya özel renk, vurgu yoğunluğu, ışık halkası yoğunluğu |
+| **Davranış** | Otomatik takip, yumuşak/anında kaydırma, paragraflar arasında 0–3 saniye bekleme, uyku zamanlayıcısı, konumu hatırlama |
+| **Kitaplık** | Kaldığın yerden devam, yer imleri, okuma listesi, okunmayacak alanlar, telaffuz sözlüğü, odak görünümü ve MP3 indirme |
+
+Vurgu ve takip ayarları sesi yeniden başlatmaz. Ses, okuma hızı, perde veya
+ses düzeyi değiştirildiğinde mevcut paragraf yeni ayarla başlar; duraklatma ve
+takip durumu korunur. Paragraf arası bekleme de oynatma duraklatıldığında bekler.
+Uzun bir paragraf birden çok ses parçasına bölünse bile bekleme yalnızca
+paragrafın sonunda uygulanır.
+
+**Uyku zamanlayıcısı**, okuma başladıktan sonra 10/20/30/60 dakika, özel süre
+(1–180 dakika) veya **bu paragraf bitince** seçenekleriyle kurulabilir. Süreye
+bağlı zamanlayıcı duraklatma sırasında da işler; ses/perde değişikliği süreyi
+sıfırlamaz. Paneldeki sayaç kalan süreyi gösterir. **Kapalı → Uygula** ile
+okumayı durdurmadan iptal edilebilir. Okuma bitince veya durdurulunca temizlenir.
+
+**Profiller** bölümünde Makale, Ders ve Gece hazır ayarları vardır. Mevcut ses,
+hız, vurgu, davranış ve tema tercihlerinizi adlandırarak en fazla 20 profil
+kaydedebilir, uygulayabilir veya silebilirsiniz. Aynı adla kaydetmek mevcut
+profili günceller. Uyku zamanlayıcısı profillere dahil edilmez.
+
+### Konum, yer imleri ve gelişmiş okuma araçları
+
+- **Kaldığım yerden devam et:** Konum yaklaşık beş saniyede bir, duraklatırken ve
+  durdururken kaydedilir. Kitaplık sekmesinden aynı yazıya geri dönülebilir.
+  Metin değişmişse kayıtlı paragraf bulunamadığı bildirilir. Davranış sekmesindeki
+  **Okuma konumunu hatırla** seçeneğiyle yeni konum kaydı kapatılır.
+- **Yer imleri:** Oynatıcıdaki ★ veya Kitaplık → Yer imi ekle mevcut paragrafı
+  ve ses konumunu saklar. Kitaplıktaki Aç/Sil düğmeleriyle yönetilir.
+- **Zaman çizgisi:** −10 sn / +10 sn, oynatma hızına göre on saniye geri/ileri
+  gider; sürgü yazı boyunca gezinir. Henüz üretilmemiş seslerin süreleri
+  tahminidir; kalan süredeki `~` işareti bunu belirtir. Paragraf arası beklemeler
+  süre tahminine dahil değildir.
+- **Okuma listesi:** Kitaplık → Okuma listesi bölümüne bu sayfayı veya bir
+  HTTP/HTTPS adresini ekleyin; ↑/↓ ile sıralayın. Sırayı başlat tek bir sekmede
+  yazıları art arda okur. Hatalı/boş sayfa atlanır; yüklemede 60 saniye zaman
+  aşımı vardır. Sırayı durdur veya okuma sekmesini kapatmak sırayı durdurur.
+  Yeniden başlatmak listeyi baştan okur; tarayıcı yeniden açılınca otomatik başlamaz.
+- **Okunmayacak alanlar:** Kitaplıktan alan seçimini açın, sayfada okumadan
+  çıkarılacak bölgeye tıklayın; Esc iptal eder. Kural aynı adres için saklanır
+  ve Kitaplıktan kaldırılabilir. Sayfanın yapısı değişirse alanı yeniden seçin.
+- **Telaffuz sözlüğü:** Kitaplıktaki düzenleyiciye her satıra `API = ey pi ay`
+  gibi bir kayıt yazıp kaydedin. En fazla 200 kural desteklenir. Seslendirme
+  değişirken sayfadaki özgün sözcük vurgulanmaya devam eder.
+- **Dile göre ses:** Okuma sekmesinde otomatik ses seçimini açıp Türkçe ve
+  İngilizce için tercihlerinizi seçin. Paragrafın `lang` bilgisi önceliklidir;
+  yoksa metin üzerinden dil tahmini yapılır. Diğer dillerde ses kataloğundan
+  uygun bir ses seçilir; kısa veya karma metinlerde tahmin yanılabilir.
+- **Odak görünümü:** Oynatıcıdaki Odak düğmesi metni sade bir okuma alanında
+  gösterir. Paragrafa tıklamak veya Enter o noktadan okumayı başlatır.
+  Görünüm sekmesinden 16–36 px yazı boyutu ve tema/kâğıt/koyu arka plan seçilir.
+- **MP3 indir:** Kitaplıktan mevcut okuma metni tek MP3 olarak indirilebilir.
+  Okuma başlamadıysa sayfa metni kullanılır. Ses, perde, ses düzeyi, sözlük ve
+  otomatik dil ayarları uygulanır; oynatma hızı ve paragraf arası bekleme dosyaya
+  işlenmez. Ses Microsoft servisinde yeniden hazırlanır; internet gerekir.
+  İlerleme ve iptal Kitaplıkta gösterilir. Hazırlık boyunca oynatma duraklar;
+  işlem bitince önceki durumu korunur. Sekmeyi kapatmak hazırlığı iptal eder.
+
+Konumlar (son 100 adres), yer imleri (300), liste (50 yazı), hariç tutma
+kuralları ve telaffuz sözlüğü yalnızca tarayıcı profilinde saklanır. Ses
+indirmeleri tarayıcının normal indirme ayarlarını kullanır.
+
 ### Görünüm temaları
 
 Popup'taki veya üst çubuğun ⚙ ayarlarındaki **Görünüm · Tema** menüsünden
@@ -142,6 +219,15 @@ okumayı yeniden başlatmaz; duraklatma, paragraf ve takip konumu korunur.
 Tema geçişlerinde eski ve yeni görünüm 320 ms içinde yumuşakça birbirine
 geçer; çubuğun yüksekliği ve sayfada ayrılan alan birlikte hareket eder.
 Sistemde **hareketi azalt** tercihi açıksa geçişler anında uygulanır.
+
+**Görünüm → Açık / koyu görünüm** alanında **Özgün görünüm**, **Açık** ve
+**Koyu** seçenekleri vardır. Özgün görünüm Windows temalarının mevcut açık
+paletini ve Modern'in mevcut davranışını korur. Koyu seçenek, Windows 95/98,
+XP ve 7'nin pencere biçimlerini koruyan uyarlanmış koyu paletler kullanır.
+Başlık, panel, alanlar, onay kutuları, açılır listeler ve kaydırma çubukları
+birlikte uyarlanır; sayfanın kendi renkleri değiştirilmez. Renk modu tema
+geçişi gibi yumuşakça uygulanır, arayüzler arasında eşzamanlanır, yerel olarak
+saklanır ve kaydedilen profillere dahil edilir.
 
 Temalar; düğmeleri, başlıkları, alanları, kaydırıcıları ve okuma vurgusunu
 birlikte değiştirir. Modern mevcut görünümü korur. Windows 95 düz lacivert,
@@ -154,6 +240,9 @@ popup aynı dönemin pencere ve form ölçülerini kullanır. Windows 95/98
 temalarında tam genişlikte klasik başlık,
 kompakt araç çubuğu ve 98.css projesinden alınan piksel yazı tipleri kullanılır.
 Stiller ve yazı tipleri uzantıyla birlikte gelir; uzaktan CSS veya font indirilmez.
+Açılır seçim listeleri ve scrollbarları da seçili temayı kullanır. Sesler dil
+gruplarıyla gösterilir; ok tuşları, Home/End, Page Up/Down ve yazarak arama
+desteklenir. Enter seçimi uygular, Escape değişikliği iptal eder.
 
 HTML class'ları ortaktır. `src/themes.js` içindeki tema katmanı, popup'ın
 `body` ve oynatıcının Shadow DOM içindeki `.wrap` kapsayıcısına verilen
@@ -218,6 +307,9 @@ flowchart LR
 | `src/drm.js` | `Sec-MS-GEC` v2 token üretimi (CS64 + SHA-256) |
 | `src/tts.js` | WebSocket protokolü, SSML, MP3 ve kelime sınırları |
 | `src/background.js` | Mesaj yönlendirme, ses listesi önbelleği, menüler |
+| `src/library.js` | Yerel kitaplık, kuyruk verisi, telaffuz eşlemesi ve kitaplık paneli |
+| `src/experience.js` | Zaman çizgisi, konum/yer imi, odak, alan seçimi ve MP3 dışa aktarma |
+| `src/settings.js` | Ortak ayar şeması, sekmeli panel, profiller ve arayüzler arası eşzamanlama |
 | `src/themes.js` | Ortak tema stilleri, tema seçimi, kalıcılık ve arayüzler arası eşzamanlama |
 | `src/content.js` | Metin çıkarma, parçalama, oynatma kuyruğu, vurgu, oynatıcı |
 | `src/popup.*` | Ses / hız / ses düzeyi / seçimden devam arayüzü |
@@ -322,8 +414,17 @@ Testler şunları doğrular:
 - Oynatıcının HTML üzerinde sabit bir üst şerit olarak içeriği aşağı
   itmesi ve kaydırma sırasında ekranın tepesinde sabit kalması
 - Üst oynatıcıdaki ⚙ ayarlar panelinin açılması ve ses listesini içermesi
+- Ayarlar açıkken ardışık kelimelerde kaydırmanın aşağı-yukarı salınmaması;
+  WordPress yönetim çubuğu, dar okuma alanı ve yumuşak kaydırma davranışı
 - Beş görünüm temasının popup ve üst çubukta eşzamanlanması, kaydedilmesi,
   dar ekrana sığması ve tema değişiminin okuma durumunu koruması
+- Açık/koyu paletlerin beş temada iki arayüze uygulanması, erişilebilir seçim
+  eşzamanlaması, profil ve yeniden açılışta korunması, yumuşak geçişler
+- Konum/yer imi, zaman çizgisiyle paragraflar arası gezinme, telaffuz ve özgün
+  kelime eşlemesi, otomatik Türkçe/İngilizce ses, odak görünümü ve alan hariç tutma
+- Üç ses parçasının tek MP3 olarak indirilmesi ve tarayıcıda çözümlenmesi,
+  iptal edilen indirmede geç gelen yanıtın dosya oluşturmaması
+- Okuma listesinin boş sayfayı atlayıp iki yazıyı ardışık tamamlaması
 - Okuma durdurulduğunda paragraf/kelime vurgusunun ve ışık halkasının
   (eski bir içerik betiğinden kalan kopyalar dahil) tamamen kaldırılması
 
@@ -339,14 +440,18 @@ edge-read-aloud/
 │   ├── background.js
 │   ├── content.js
 │   ├── content.css
+│   ├── experience.js
+│   ├── library.js
 │   ├── drm.js
 │   ├── popup.html
 │   ├── popup.css
+│   ├── settings.js
 │   ├── themes.js
 │   ├── popup.js
 │   └── tts.js
 ├── tests/
 │   ├── fixture.html
+│   ├── fixture.mp3
 │   └── run.mjs
 ├── icons/
 ├── store/

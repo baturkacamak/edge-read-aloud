@@ -1,46 +1,22 @@
 const themes = globalThis.SesliOkuThemes;
+const preferences = globalThis.SesliOkuSettings;
 const themeStyle = document.createElement("style");
-themeStyle.textContent = themes.css;
+themeStyle.textContent = themes.css + preferences.css + globalThis.SesliOkuLibrary.css;
 document.head.appendChild(themeStyle);
-const themeSelect = document.getElementById("theme");
-themes.fillSelect(themeSelect);
-themes.subscribe(theme => {
-  themes.apply(document.body, theme);
-  themeSelect.value = theme;
+const settingsUi = preferences.mount(document.getElementById("preferences"), {
+  onTimer: timer => callBackground("SET_SLEEP_TIMER", { timer }),
 });
-themeSelect.addEventListener("change", async () => {
-  try {
-    await themes.set(themeSelect.value);
-  } catch (error) {
-    themeSelect.value = themes.current();
-    setStatus(error.message, true);
-  }
-});
-
-const DEFAULT_SETTINGS = {
-  voice: "tr-TR-EmelNeural",
-  rate: 0,
-  pitch: 0,
-  volume: 0,
-  playbackRate: 1,
-  continueSelection: true,
-};
-
+themes.subscribe(theme => themes.apply(document.body, theme));
 const elements = {
-  voice: document.getElementById("voice"),
-  rate: document.getElementById("rate"),
-  volume: document.getElementById("volume"),
-  rateValue: document.getElementById("rate-value"),
-  volumeValue: document.getElementById("volume-value"),
+  voice: settingsUi.voice,
   readPage: document.getElementById("read-page"),
   readSelection: document.getElementById("read-selection"),
   readHere: document.getElementById("read-here"),
   stop: document.getElementById("stop"),
-  continueSelection: document.getElementById("continue-selection"),
   status: document.getElementById("status"),
 };
-
-let settings = { ...DEFAULT_SETTINGS };
+let settings = preferences.current();
+preferences.subscribe(value => { settings = value; });
 
 const languageNames = (() => {
   try {
@@ -124,24 +100,7 @@ function renderVoices(voices) {
     elements.voice.appendChild(option);
   }
   elements.voice.value = settings.voice;
-}
-
-function updateOutputs() {
-  const rate = Number(elements.rate.value);
-  const volume = Number(elements.volume.value);
-  elements.rateValue.textContent = `${rate > 0 ? "+" : ""}${rate}%`;
-  elements.volumeValue.textContent = `${volume > 0 ? "+" : ""}${volume}%`;
-}
-
-async function saveSettings() {
-  settings = {
-    ...settings,
-    voice: elements.voice.value || DEFAULT_SETTINGS.voice,
-    rate: Number(elements.rate.value),
-    volume: Number(elements.volume.value),
-    continueSelection: elements.continueSelection.checked,
-  };
-  await chrome.storage.local.set({ settings });
+  settingsUi.renderVoiceChoices(voices);
 }
 
 async function start(type) {
@@ -150,7 +109,7 @@ async function start(type) {
   elements.readHere.disabled = true;
   setStatus("Başlatılıyor…");
   try {
-    await saveSettings();
+    await preferences.ready;
     await callBackground(type);
     setStatus("Başladı");
     setTimeout(() => window.close(), 220);
@@ -164,12 +123,7 @@ async function start(type) {
 }
 
 async function init() {
-  const stored = await chrome.storage.local.get("settings");
-  settings = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
-  elements.rate.value = String(settings.rate ?? 0);
-  elements.volume.value = String(settings.volume ?? 0);
-  elements.continueSelection.checked = settings.continueSelection !== false;
-  updateOutputs();
+  await preferences.ready;
 
   try {
     const { voices, warning } = await callBackground("GET_VOICES");
@@ -179,19 +133,6 @@ async function init() {
     setStatus(error.message, true);
   }
 }
-
-elements.rate.addEventListener("input", () => {
-  updateOutputs();
-  saveSettings();
-});
-
-elements.volume.addEventListener("input", () => {
-  updateOutputs();
-  saveSettings();
-});
-
-elements.voice.addEventListener("change", saveSettings);
-elements.continueSelection.addEventListener("change", saveSettings);
 
 elements.readPage.addEventListener("click", () => start("START_PAGE"));
 elements.readSelection.addEventListener("click", () => start("START_SELECTION"));

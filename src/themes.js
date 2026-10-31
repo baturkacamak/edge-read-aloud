@@ -13,25 +13,31 @@
     { id: "win7", label: "Windows 7" },
   ]);
   const normalize = value => choices.some(choice => choice.id === value) ? value : "modern";
+  const normalizeMode = value => ["light", "dark"].includes(value) ? value : "original";
+  let mode = "original";
   let current = "modern";
   let hydrated = false;
   const listeners = new Set();
   const publish = value => {
+    globalThis.SesliOkuSettings?.closeDropdowns();
     current = normalize(value);
     if (current === "win95" || current === "win98") loadClassicFonts();
     for (const listener of listeners) listener(current);
   };
   // Subscribe before reading storage, so another window's changes are not lost.
-  let storageRevision = 0;
+  const storageRevision = { theme: 0, mode: 0 };
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.appearanceTheme) {
-      storageRevision++;
+    if (area === "local" && (changes.appearanceTheme || changes.appearanceMode)) {
+      if (changes.appearanceTheme) storageRevision.theme++;
+      if (changes.appearanceMode) storageRevision.mode++;
       hydrated = true;
-      publish(changes.appearanceTheme.newValue);
+      if (changes.appearanceMode) mode = normalizeMode(changes.appearanceMode.newValue);
+      publish(changes.appearanceTheme ? changes.appearanceTheme.newValue : current);
     }
   });
-  const ready = chrome.storage.local.get("appearanceTheme").then(stored => {
-    if (!storageRevision) publish(stored.appearanceTheme);
+  const ready = chrome.storage.local.get(["appearanceTheme", "appearanceMode"]).then(stored => {
+    if (!storageRevision.mode) mode = normalizeMode(stored.appearanceMode);
+    publish(storageRevision.theme ? current : stored.appearanceTheme);
     hydrated = true;
     return current;
   }).catch(() => { hydrated = true; return current; });
@@ -67,12 +73,13 @@
   function apply(root, value, container = root) {
     if (!root) return;
     const theme = normalize(value);
-    if (root.dataset.theme === theme) return;
+    if (root.dataset.theme === theme && root.dataset.colorMode === mode) return;
     const oldRect = container.getBoundingClientRect();
     finishTransition(root);
     if (!hydrated || !root.isConnected || !oldRect.height || motionQuery.matches ||
         document.visibilityState !== "visible" || typeof root.animate !== "function") {
       root.dataset.theme = theme;
+      root.dataset.colorMode = mode;
       return;
     }
 
@@ -102,6 +109,7 @@
     const overflow = container.style.getPropertyValue("overflow");
     const overflowPriority = container.style.getPropertyPriority("overflow");
     root.dataset.theme = theme;
+    root.dataset.colorMode = mode;
     const newHeight = container.getBoundingClientRect().height;
     // Popup snapshots are siblings so the new body's theme selectors cannot
     // style the old copy. Toolbar snapshots stay inside its isolated root.
@@ -132,7 +140,7 @@
   }
 
   const css = `
-    @layer base, themes;
+    @layer base, themes, preferences, experience, appearance;
     @layer themes {
     /* Native-style chrome: labels and button captions cannot be selected.
        This shared stylesheet only runs in the popup or toolbar shadow root. */
@@ -443,17 +451,6 @@
     body[data-theme="win7"] h1 { font: 400 12px/1.4 var(--theme-font); letter-spacing: 0; text-shadow: 0 0 4px #fff, 0 0 10px #fff; }
     body[data-theme="win7"] .actions { padding: 8px; background: #f7fafd; border: 1px solid #adbfce; margin-bottom: 12px; }
     body:is([data-theme="xp"], [data-theme="win7"]) .field label { font-weight: 400; }
-    body:is([data-theme="xp"], [data-theme="win7"]) .check { font-size: var(--era-control-size); }
-    body:is([data-theme="xp"], [data-theme="win7"]) .check input {
-      appearance: none; width: 13px; height: 13px; border: 1px solid #7f9db9; border-radius: 1px;
-      background: linear-gradient(135deg, #dce4e9, #fff 70%); box-shadow: inset 0 0 0 1px #fff;
-    }
-    body:is([data-theme="xp"], [data-theme="win7"]) .check input:checked::after {
-      content: ""; display: block; width: 6px; height: 3px; margin: 2px 0 0 2px;
-      border-left: 2px solid #218b21; border-bottom: 2px solid #218b21; transform: rotate(-45deg);
-    }
-    body[data-theme="win7"] .check input { border-color: #7c8d9a; background: linear-gradient(135deg, #e5ebf0, #fff); }
-    body[data-theme="win7"] .check input:checked::after { border-color: #245b7f; }
     @media (max-width: 460px) {
       .wrap:is([data-theme="xp"], [data-theme="win7"]) .bar { gap: 6px 4px; }
       .wrap:is([data-theme="xp"], [data-theme="win7"]) .brand { flex-basis: auto; }
@@ -532,13 +529,6 @@
     body:is([data-theme="win95"], [data-theme="win98"]) h1 { font: 700 11px/1.4 var(--theme-font); letter-spacing: 0; }
     body:is([data-theme="win95"], [data-theme="win98"]) .field { margin-bottom: 10px; }
     body:is([data-theme="win95"], [data-theme="win98"]) :is(.field label, button.primary) { font-weight: 400; }
-    body:is([data-theme="win95"], [data-theme="win98"]) .check input {
-      appearance: none; width: 13px; height: 13px; background: #fff; box-shadow: var(--theme-field);
-    }
-    body:is([data-theme="win95"], [data-theme="win98"]) .check input:checked::after {
-      content: ""; display: block; width: 6px; height: 3px; margin: 3px 0 0 3px;
-      border-left: 2px solid #000; border-bottom: 2px solid #000; transform: rotate(-45deg);
-    }
     @media (max-width: 460px) {
       .wrap:is([data-theme="win95"], [data-theme="win98"]) .bar { gap: 5px 4px; }
       .wrap:is([data-theme="win95"], [data-theme="win98"]) .brand { flex-basis: auto; }
@@ -587,6 +577,100 @@
       [data-theme]:where(:not([data-theme="modern"])) button { border: 1px solid ButtonText; }
     }
     }
+    @layer appearance {
+      [data-color-mode="dark"] {
+        color-scheme: dark;
+        --bg: #222629; --panel: #191d20; --text: #edf0f3; --muted: #b4bcc4;
+        --border: #59636c; --accent: #91baff; --accent-text: #101a2a;
+        --accent-hover: #bad3ff; --danger: #ffb1a1;
+        --theme-button: linear-gradient(#41484f, #30363c);
+        --theme-button-hover: linear-gradient(#505c69, #3a4653);
+        --theme-button-border: #717e89;
+        --theme-raised: inset 1px 1px #68717a, inset -1px -1px #101316;
+        --theme-pressed: inset 1px 1px #101316, inset -1px -1px #68717a;
+        --theme-field: inset 1px 1px #101316, inset -1px -1px #68717a;
+        --theme-window: inset 1px 1px #68717a, inset -1px -1px #101316;
+        color: var(--text); background: var(--bg);
+      }
+      :is([data-theme="win95"], [data-theme="win98"])[data-color-mode="dark"] {
+        --bg: #303030; --panel: #202020; --theme-button: #383838;
+        --theme-button-hover: #474747; --border: #707070;
+      }
+      [data-theme="xp"][data-color-mode="dark"] {
+        --bg: #252b35; --panel: #191f2a; --border: #65758c;
+        --theme-button: linear-gradient(#45536b, #2b3649 85%, #222b3b);
+        --theme-button-hover: linear-gradient(#5a6d8c, #384862);
+        --theme-title: linear-gradient(#346fcb, #164b9a 12%, #123b80 75%, #102b62);
+      }
+      [data-theme="win7"][data-color-mode="dark"] {
+        --bg: #23313e; --panel: #18232e; --border: #617c91;
+        --theme-title: linear-gradient(115deg, #48647b, #233d53 50%, #304e65);
+        --theme-title-text: #edf5ff;
+        --theme-button: linear-gradient(#526679, #364b5e 48%, #293e50 49%, #344e64);
+        --theme-button-hover: linear-gradient(#63829b, #3d617c 48%, #2e506b 49%, #426783);
+      }
+      .wrap[data-color-mode="dark"] { background: var(--bg); }
+      [data-theme="modern"][data-color-mode="dark"] { --accent: #d9f27a; --accent-text: #14180f; --accent-hover: #e6fb96; }
+      [data-color-mode="dark"] .settings {
+        background: var(--bg); border-color: var(--border); box-shadow: inset 0 0 0 1px #68717a55;
+      }
+      body[data-color-mode="dark"] .actions { background: var(--panel); border-color: var(--border); }
+      .wrap:is([data-theme="win95"], [data-theme="win98"])[data-color-mode="dark"] button.close { color: var(--text); }
+      .wrap[data-theme="win7"][data-color-mode="dark"] {
+        background: linear-gradient(120deg, #30495fed, #1e3346ed 50%, #37536bed);
+        box-shadow: inset 0 0 0 1px #7698b855, 0 2px 6px #0006;
+      }
+      [data-color-mode="dark"] :is(.brand, .brand strong) { text-shadow: none; }
+      [data-color-mode="dark"] :is(.status, .sleep-status, .field label, .label-row output) { color: var(--text); }
+      [data-color-mode="dark"] .status { background: var(--panel); border-color: var(--border); box-shadow: inset 1px 1px #0003; }
+      [data-color-mode="dark"] .preferences {
+        --pref-page: var(--panel); --pref-tab: var(--theme-button);
+        --pref-tab-border: var(--border);
+      }
+      [data-color-mode="dark"] :is(select, textarea, input[type="url"], input[type="text"], input[type="number"]) {
+        color: var(--text); background-color: var(--panel); border-color: var(--border);
+      }
+      [data-color-mode="dark"] select {
+        background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='17' height='19'%3E%3Crect x='.5' y='.5' width='16' height='18' rx='1' fill='%233b4653' stroke='%23717e89'/%3E%3Cpath d='m5 8 3.5 3L12 8' fill='none' stroke='%23edf0f3' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 1px center;
+      }
+      [data-color-mode="dark"] :is(option, optgroup) { color: var(--text); background: var(--panel); }
+      [data-color-mode="dark"] .preferences .pref-select-popup {
+        color-scheme: dark; --drop-track: #20272e; --drop-thumb: var(--theme-button);
+        --drop-button: #36424e; --drop-shadow: var(--theme-raised);
+      }
+      [data-color-mode="dark"] .preferences .pref-select-popup::-webkit-scrollbar-thumb:hover { background: var(--theme-button-hover); }
+      [data-color-mode="dark"] .preferences input[type="checkbox"] {
+        background: var(--panel); border-color: var(--border); box-shadow: var(--theme-field);
+      }
+      [data-color-mode="dark"] .preferences .pref-check:hover input[type="checkbox"]:not(:disabled):not(:active) { background: #36424e; box-shadow: var(--theme-field); }
+      [data-color-mode="dark"] .preferences input[type="checkbox"]:active:not(:disabled) { background: #465568; }
+      [data-color-mode="dark"] .preferences input[type="checkbox"]:checked::after { filter: brightness(0) invert(1); }
+      [data-theme]:not([data-theme="modern"])[data-color-mode="dark"] input[type="range"]::-webkit-slider-runnable-track { background: #17202a; border-color: #647584; box-shadow: 0 1px #68717a; }
+      [data-theme]:not([data-theme="modern"])[data-color-mode="dark"] input[type="range"]::-webkit-slider-thumb { background: var(--theme-button); border-color: var(--theme-button-border); box-shadow: var(--theme-raised); }
+      [data-color-mode="dark"] :is(.preferences, .focus-text)::-webkit-scrollbar { width: 15px; }
+      [data-color-mode="dark"] :is(.preferences, .focus-text)::-webkit-scrollbar-track { background: #20272e; }
+      [data-color-mode="dark"] :is(.preferences, .focus-text)::-webkit-scrollbar-thumb { background: var(--theme-button); border: 1px solid var(--border); box-shadow: var(--theme-raised); }
+      [data-theme="modern"][data-color-mode="light"] {
+        color-scheme: light; --bg: #f7f7f3; --panel: #fff; --text: #1a1d1b;
+        --muted: #59645b; --border: #cbd2c8; --accent: #c7e35a; --accent-text: #161a10;
+        --accent-hover: #d5ee72; --danger: #a82e20;
+        --theme-button: #e5e9e1; --theme-button-hover: #d6ddcf;
+        color: var(--text); background: var(--bg);
+      }
+      .wrap[data-theme="modern"][data-color-mode="light"] { background: var(--bg); border-color: var(--border); }
+      [data-theme="modern"][data-color-mode="light"] :is(.brand strong, .status, .field label, .label-row output, .sleep-status) { color: var(--text); }
+      [data-theme="modern"][data-color-mode="light"] :is(.brand small, .brand svg) { color: var(--muted); }
+      [data-theme="modern"][data-color-mode]:not([data-color-mode="original"]) button { color: var(--text); background: var(--theme-button); }
+      [data-theme="modern"][data-color-mode]:not([data-color-mode="original"]) button:hover { background: var(--theme-button-hover); }
+      [data-theme="modern"][data-color-mode]:not([data-color-mode="original"]) button.primary { background: var(--accent); color: var(--accent-text); }
+      [data-theme="modern"][data-color-mode="light"] :is(select, input[type="number"], input[type="text"]) { background-color: var(--panel); color: var(--text); border-color: var(--border); }
+      [data-theme="modern"][data-color-mode="light"] .divider { background: var(--border); }
+      [data-theme="modern"][data-color-mode="light"] .settings { border-color: var(--border); }
+      @media (forced-colors: active) {
+        [data-color-mode="dark"] { color-scheme: light dark; }
+        [data-color-mode="dark"] .preferences input[type="checkbox"]:checked::after { filter: none; }
+      }
+    }
   `;
   function fillSelect(select) {
     select.replaceChildren(...choices.map(({ id, label }) => {
@@ -598,7 +682,13 @@
     select.value = current;
   }
   globalThis.SesliOkuThemes = Object.freeze({
-    choices, css, ready, normalize, apply, finishTransition,
+    choices, css, ready, normalize, normalizeMode, apply, finishTransition,
+    mode: () => mode,
+    async setMode(value) {
+      const next = normalizeMode(value);
+      await chrome.storage.local.set({ appearanceMode: next });
+      mode = next; publish(current); return mode;
+    },
     current: () => current,
     fillSelect,
     subscribe(listener) {
