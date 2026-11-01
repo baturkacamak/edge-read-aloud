@@ -2,6 +2,7 @@ import "./library.js";
 import "./settings.js";
 import "./vault.js";
 import "./tools.js";
+import "./insights.js";
 const library = globalThis.SesliOkuLibrary;
 import { tts, listVoices } from "./tts.js";
 
@@ -346,6 +347,10 @@ async function libraryAction(message, sender) {
     if(context.url?.startsWith(chrome.runtime.getURL('src/reader.html'))){const id=new URL(context.url).searchParams.get('book');if(id){const book=await globalThis.SesliOkuVault.get(id);if(book?.kind==='audio')context.speech=book.settings;}}
     return { context };
   }
+  if (action === 'stats') return {stats:await SesliOkuInsights.stats(args)};
+  if (action === 'syncNow') return SesliOkuInsights.synchronize();
+  if (action === 'syncEnable') return SesliOkuInsights.configure(args.enabled);
+  if (action === 'syncClear') return SesliOkuInsights.clearRemote();
   if (action === 'backup') return {backup:await globalThis.SesliOkuTools.backup(),message:'Yedek indiriliyor.'};
   if (action === 'restore') { const owner=library.current().queueTabId;const parsed=globalThis.SesliOkuTools.validateBackup(args.backup);if(!parsed)throw new Error('Geçersiz yedek.');if(owner){try{await sendToTab(owner,{target:'content',type:'STOP'});}catch{}}return globalThis.SesliOkuTools.restore(args.backup); }
   if (action === 'siteSave') { await library.mutate({type:action,...args});return {message:'Bu sitenin ayarları kaydedildi.'}; }

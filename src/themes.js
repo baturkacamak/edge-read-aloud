@@ -672,13 +672,19 @@
       [data-theme="modern"][data-color-mode="light"] .settings { border-color: var(--border); }
       /* Theme the native disclosure widget without replacing its keyboard or
          expanded/collapsed semantics. Scope every rule to the extension root. */
+      /* Reserve space on the disclosure itself: child margins cannot inset
+         inline labels or full-width textareas without causing overflow. */
+      [data-theme] details { padding: 0 10px 10px; }
+      [data-theme] details:not([open]) { padding-bottom: 0; }
+      [data-theme] details > summary { margin: 0 -10px; }
+      [data-theme] details[open] > summary { margin-bottom: 8px; }
       [data-theme]:where(:not([data-theme="modern"])) details {
         margin-block: 6px; border: 1px solid var(--border); border-radius: var(--theme-radius);
         background: var(--panel); color: var(--text);
       }
       [data-theme]:where(:not([data-theme="modern"])) details > summary {
         display: flex; align-items: center; gap: 6px; box-sizing: border-box;
-        min-height: 25px; margin: 0; padding: 4px 7px; list-style: none;
+        min-height: 25px; margin: 0 -10px; padding: 4px 7px; list-style: none;
         cursor: default; color: inherit; overflow-wrap: anywhere;
       }
       [data-theme]:where(:not([data-theme="modern"])) details > summary::-webkit-details-marker { display: none; }
@@ -687,9 +693,8 @@
         outline: 1px dotted currentColor; outline-offset: -4px;
       }
       [data-theme]:where(:not([data-theme="modern"])) details[open] > summary { border-bottom: 1px solid var(--border); }
-      [data-theme]:where(:not([data-theme="modern"])) details > :not(summary) { margin-left: 8px; margin-right: 8px; }
       [data-theme]:where(:not([data-theme="modern"])) .library-item { margin: 0; }
-      [data-theme]:where(:not([data-theme="modern"])) .repeat-controls { margin: 0 6px 6px; padding: 0; }
+      [data-theme]:where(:not([data-theme="modern"])) .repeat-controls { margin: 0 6px 6px; }
       :is([data-theme="win95"], [data-theme="win98"]) details {
         border-radius: 0; background: var(--bg); box-shadow: inset 1px 1px #ffffff55;
       }

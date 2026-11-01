@@ -354,6 +354,7 @@
         background: var(--panel, #242a24); color: inherit; border-radius: var(--theme-radius, 3px); font: inherit;
         user-select: text; -webkit-user-select: text;
       }
+      .library-panel { box-sizing: border-box; padding: 12px; border: 1px solid var(--border, #56604a); background: var(--panel, transparent); }
       .pref-tabs { display: flex; gap: 3px; border-bottom: 1px solid var(--border, #56604a); margin-bottom: 12px; }
       .preferences .pref-tab { border-radius: var(--theme-radius, 5px) var(--theme-radius, 5px) 0 0; }
       .preferences .pref-tab[aria-selected="true"] { font-weight: 700; border-bottom-color: transparent; background: var(--panel, #ffffff1c); }
@@ -575,7 +576,7 @@
         content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 3px;
         background: var(--pref-page); pointer-events: none;
       }
-      [data-theme]:where(:not([data-theme="modern"])) .preferences .pref-pane {
+      [data-theme]:where(:not([data-theme="modern"])) .preferences :is(.pref-pane, .library-panel) {
         position: relative; z-index: 0; box-sizing: border-box; min-width: 0;
         padding: 14px 12px; border: 1px solid var(--pref-tab-border);
         background: var(--pref-page);
@@ -588,7 +589,7 @@
       :is([data-theme="win95"], [data-theme="win98"]) .preferences .pref-tab[aria-selected="true"] {
         box-shadow: inset 1px 1px #dfdfdf, inset -1px 0 #808080;
       }
-      :is([data-theme="win95"], [data-theme="win98"]) .preferences .pref-pane {
+      :is([data-theme="win95"], [data-theme="win98"]) .preferences :is(.pref-pane, .library-panel) {
         border: 0; box-shadow: var(--theme-window);
       }
       [data-theme="xp"] .preferences .pref-tab[aria-selected="true"] {
@@ -740,6 +741,7 @@
       for (const dropdown of dropdowns) dropdown.sync();
       if (settings.highlightColor === "theme") elements.highlightColor.value = highlightColorFor(settings, theme);
     });
+    root.addEventListener('library-group-change',onLayout);
     const libraryUi = globalThis.SesliOkuLibrary.mount(root.querySelector(".library-mount"));
     function renderVoiceChoices(voices) {
       for (const [key, locale] of [["turkishVoice", "tr-"], ["englishVoice", "en-"]]) {
@@ -754,7 +756,7 @@
     }
     for (const select of root.querySelectorAll("select")) dropdowns.push(enhanceSelect(select));
     return { ...elements, closeDropdowns, renderVoiceChoices, rateValue: byId("rate-value"), volumeValue: byId("volume-value"), root, sync, syncTimer, activateTab,
-      dispose() { unsubscribe(); unsubscribeTheme(); libraryUi.dispose(); clearInterval(timerInterval); for (const dropdown of dropdowns) dropdown.dispose(); } };
+      dispose() { root.removeEventListener('library-group-change',onLayout);unsubscribe(); unsubscribeTheme(); libraryUi.dispose(); clearInterval(timerInterval); for (const dropdown of dropdowns) dropdown.dispose(); } };
   }
   function subscribe(listener) { listeners.add(listener); listener(settings, profiles, timer); return () => listeners.delete(listener); }
   globalThis.SesliOkuLibrary?.subscribe(value=>{const signature=JSON.stringify(value.sites||{});if(signature!==siteSignature){siteSignature=signature;setContext(contextUrl,contextSpeech);}});

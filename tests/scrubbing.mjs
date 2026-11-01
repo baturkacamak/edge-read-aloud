@@ -1,0 +1,55 @@
+/** Slider input previews words without synthesizing or restarting every step. */
+export async function checkScrubbing({evalIso,check,waitFor,WAIT,pageCdp}) {
+  console.log('\n  Timeline word preview');
+  await pageCdp.send('Page.bringToFront');
+  await evalIso(`__sesliOkuTest.stop();SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:true,scrollBehavior:'instant',playbackRate:1.5})`,true);
+  await evalIso(`__sesliOkuTest.syntheticAudio(12000);__sesliOkuTest.startBlocks(['#p1','#p2','#p3','#p4','#p5'])`);
+  await waitFor('audio before dragging',()=>evalIso(`__sesliOkuTest.snapshot().audioState?.readyState>=2`));await WAIT(200);
+  const before=await evalIso(`({session:__sesliOkuTest.snapshot().session,requests:__sesliOkuTest.snapshot().testRequests.length,index:__sesliOkuTest.snapshot().index,time:__sesliOkuTest.snapshot().audioState.currentTime})`);
+  const input=async value=>{await evalIso(`(()=>{const slider=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input');slider.value=${value};slider.dispatchEvent(new Event('input',{bubbles:true}));})()`);await WAIT(80);};
+  await input(90);const first=await evalIso(`({snapshot:__sesliOkuTest.snapshot(),point:__sesliOkuTest.experience().scrub})`);
+  check('dragging immediately previews the timed word without committing a seek',!!first.snapshot.wordText&&first.point?.index===0&&first.point.estimated===false&&first.snapshot.session===before.session&&first.snapshot.index===before.index&&first.snapshot.paused);
+  await input(800);const second=await evalIso(`({snapshot:__sesliOkuTest.snapshot(),point:__sesliOkuTest.experience().scrub})`);
+  check('dragging across paragraphs previews an unprepared word',second.point?.index>0&&second.point.estimated&&second.snapshot.wordText===second.snapshot.chunks[second.point.index].text.slice(second.point.range.start,second.point.range.end));
+  check('preview follows the chosen word into the visible page',second.snapshot.wordRect?.top>=second.snapshot.hostRect.bottom&&second.snapshot.wordRect.bottom<=second.snapshot.innerHeight-180,JSON.stringify({word:second.snapshot.wordRect,host:second.snapshot.hostRect}));
+  await input(450);await input(700);await input(550);
+  const preview=await evalIso(`({snapshot:__sesliOkuTest.snapshot(),point:__sesliOkuTest.experience().scrub})`);
+  check('repeated slider input makes no new synthesis requests or sessions',preview.snapshot.testRequests.length===before.requests&&preview.snapshot.session===before.session);
+  check('estimated positions are explained accessibly',await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input').getAttribute('aria-valuetext').includes('Yaklaşık')`));
+  const expected=preview.point;
+  await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input').dispatchEvent(new Event('change',{bubbles:true}))`);
+  await waitFor('released slider starts selected resource',()=>evalIso(`__sesliOkuTest.snapshot().index===${expected.index}&&__sesliOkuTest.snapshot().audioState?.readyState>=2&&!__sesliOkuTest.snapshot().audioState.paused`));
+  const committed=await evalIso(`__sesliOkuTest.snapshot()`);
+  check('release commits once and continues at the previewed word',committed.session===before.session+1&&!committed.paused&&committed.wordText===committed.chunks[expected.index].text.slice(expected.range.start,expected.range.end),JSON.stringify({word:committed.wordText,expected,audio:committed.audioState}));
+  check('slider seeking preserves playback speed',committed.audioState.rate===1.5);
+  await evalIso(`__sesliOkuTest.pause()`);await input(200);
+  const pausedPreview=await evalIso(`__sesliOkuTest.experience().scrub`);
+  await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input').dispatchEvent(new Event('change',{bubbles:true}))`);
+  check('dragging a paused player leaves it paused on release',await evalIso(`__sesliOkuTest.snapshot().paused&&__sesliOkuTest.snapshot().index===${pausedPreview.index}`));
+  // Resume to install native audio, then cancel a later preview with Escape.
+  await evalIso(`__sesliOkuTest.playback()`);await waitFor('resumed audio after paused seek',()=>evalIso(`__sesliOkuTest.snapshot().audioState?.readyState>=2&&!__sesliOkuTest.snapshot().audioState.paused`));
+  const cancelBefore=await evalIso(`({session:__sesliOkuTest.snapshot().session,index:__sesliOkuTest.snapshot().index})`);
+  await input(900);
+  await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);await WAIT(150);
+  check('Escape cancels the preview and resumes the original position',await evalIso(`!__sesliOkuTest.experience().scrub&&!__sesliOkuTest.snapshot().paused&&__sesliOkuTest.snapshot().session===${cancelBefore.session}&&__sesliOkuTest.snapshot().index===${cancelBefore.index}`));
+  const initialWord=await evalIso(`__sesliOkuTest.snapshot().wordText`);await WAIT(1000);
+  check('word highlighting keeps advancing after canceling',await evalIso(`__sesliOkuTest.snapshot().wordText!==${JSON.stringify(initialWord)}`));
+  await input(850);await evalIso(`__sesliOkuTest.stop()`);
+  check('stopping clears an active preview',await evalIso(`!__sesliOkuTest.experience().scrub&&!__sesliOkuTest.snapshot().playing`));
+  await evalIso(`__sesliOkuTest.syntheticAudio(12000);__sesliOkuTest.startBlocks(['#p1','#p2','#p3','#p4','#p5'])`);
+  await waitFor('audio for native pointer drag',()=>evalIso(`__sesliOkuTest.snapshot().audioState?.readyState>=2`));await WAIT(150);
+  const sliderBox=await evalIso(`(()=>{const el=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input');const r=el.getBoundingClientRect();return {x:r.left+8+(r.width-16)*Number(el.value)/1000,y:r.top+r.height/2,target:r.left+r.width*.8};})()`);
+  const pointerSession=await evalIso(`__sesliOkuTest.snapshot().session`);
+  await pageCdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:sliderBox.x,y:sliderBox.y});
+  await pageCdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:sliderBox.x,y:sliderBox.y,button:'left',buttons:1,clickCount:1});
+  await pageCdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:sliderBox.target,y:sliderBox.y,button:'left',buttons:1});await WAIT(100);
+  check('a real mouse drag previews a later paragraph while held',await evalIso(`__sesliOkuTest.experience().scrub?.index>0&&__sesliOkuTest.snapshot().session===${pointerSession}&&!!__sesliOkuTest.snapshot().wordText`));
+  await pageCdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:sliderBox.target,y:sliderBox.y,button:'left',buttons:0,clickCount:1});await WAIT(150);
+  check('releasing the native thumb commits its preview',await evalIso(`!__sesliOkuTest.experience().scrub&&__sesliOkuTest.snapshot().session===${pointerSession+1}&&!__sesliOkuTest.snapshot().paused`));
+  await evalIso(`__sesliOkuTest.libraryAction('focus')`,true);await input(600);
+  check('focus view previews the same selected word',await evalIso(`(()=>{const s=__sesliOkuTest.experience().scrub;const mark=document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.focus-text p.active mark');const chunk=__sesliOkuTest.snapshot().chunks[s.index];return mark?.textContent===chunk.text.slice(s.range.start,s.range.end);})()`));
+  await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.playback-strip input').dispatchEvent(new Event('pointercancel',{bubbles:true}))`);
+  check('canceled pointer gestures leave no paused scrub behind',await evalIso(`!__sesliOkuTest.experience().scrub&&!__sesliOkuTest.snapshot().paused`));
+  await evalIso(`__sesliOkuTest.stop()`);
+  await evalIso(`SesliOkuSettings.update(SesliOkuSettings.defaults)`,true);
+}

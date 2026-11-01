@@ -53,16 +53,22 @@
   function mutate(operation) {
     if (!worker) return rpc("LIBRARY_MUTATE", { operation }).then(result => { data = clean(result.library); notify(); return data; });
     const task = writes.then(async () => {
-      const stored = await chrome.storage.local.get("readingLibrary");
+      const stored = await chrome.storage.local.get(["readingLibrary","syncJournal"]);
       const next = clean(stored.readingLibrary);
       const op = operation;
       if (op.type === "progress") {
         const url = pageKey(op.url); const old = next.pages[url] || {};
-        next.pages[url] = { ...old, url, title: String(op.title || url).slice(0, 250), anchor: op.anchor, completed: !!op.completed, updated: Date.now() };
+        next.pages[url] = { ...old, url, title: String(op.title || url).slice(0, 250), anchor: op.anchor, completed: !!op.completed, updated: Math.max(Date.now(),(Number(old.updated)||0)+1,(Number(stored.syncJournal?.removedPages?.[url])||0)+1) };
+      } else if(op.type === 'syncMerge') {
+        for(const [url,page]of Object.entries(op.pages||{}))if((page.updated||0)>(next.pages[url]?.updated||0))next.pages[url]={...next.pages[url],...page,exclusions:next.pages[url]?.exclusions||[]};
+        for(const [url,stamp]of Object.entries(op.removedPages||{}))if((next.pages[url]?.updated||0)<=stamp)delete next.pages[url];
+        const items=new Map(next.bookmarks.map(item=>[item.id,item]));
+        for(const item of op.bookmarks||[]){const old=items.get(item.id);if(!old||(item.updated||item.created||0)>(old.updated||old.created||0))items.set(item.id,item);}
+        next.bookmarks=[...items.values()].filter(item=>(op.removed?.[item.id]||0)<(item.updated||item.created||0)).sort((a,b)=>(a.created||0)-(b.created||0)).slice(-300);
       } else if (op.type === "bookmark") {
         const url = pageKey(op.url);
         const duplicate = next.bookmarks.find(item => item.url === url && item.anchor.quote === op.anchor.quote && item.anchor.charOffset === op.anchor.charOffset);
-        if (!duplicate) next.bookmarks.push({ id: crypto.randomUUID(), url, title: String(op.title || url).slice(0, 250), anchor: op.anchor, created: Date.now() });
+        if (!duplicate) next.bookmarks.push({ id: crypto.randomUUID(), url, title: String(op.title || url).slice(0, 250), anchor: op.anchor, created: Date.now(), updated: Date.now() });
         next.bookmarks = next.bookmarks.slice(-300);
       } else if (op.type === "bookmarkRemove") next.bookmarks = next.bookmarks.filter(item => item.id !== op.id);
       else if (op.type === "exclude") {
@@ -81,7 +87,7 @@
       else if (op.type === "itemEdit") {
         const list = op.collection === 'queue' ? next.queue : next.bookmarks;
         const item = list.find(entry=>entry.id===op.id); if (!item) throw new Error('Kayıt bulunamadı.');
-        item.note = String(op.note || '').slice(0,3000); item.tags = tags(op.tags);
+        item.note = String(op.note || '').slice(0,3000); item.tags = tags(op.tags); item.updated = Math.max(Date.now(),(Number(item.updated||item.created)||0)+1,(Number(stored.syncJournal?.removed?.[item.id])||0)+1);
       } else if (op.type === 'siteSave') {
         const origin = siteOrigin(op.url); if (!origin) throw new Error('Bu adres için site ayarı kaydedilemez.');
         if (!next.sites[origin] && Object.keys(next.sites).length >= 100) throw new Error('En fazla 100 site kaydedilebilir.');
@@ -120,6 +126,43 @@
     return rpc("LIBRARY_ACTION", { action, args });
   }
   function subscribe(listener) { listeners.add(listener); listener(data); return () => listeners.delete(listener); }
+  // Resolve text before considering a DOM path: paths can survive while their text changes.
+  function resolveAnchor(anchor, chunks) {
+    const quote=String(anchor.quote||'');const offset=Math.max(0,Number(anchor.charOffset)||0);
+    const target=String(anchor.target||quote.slice(offset,offset+80));
+    const candidates=[];
+    if(target.length>=8)for(const [index,chunk]of chunks.entries()){
+      let at=-1;while((at=chunk.text.indexOf(target,at+1))>=0){
+        const before=String(anchor.before||'');const after=String(anchor.after||'');
+        let score=0;const left=chunk.text.slice(Math.max(0,at-before.length),at);const right=chunk.text.slice(at+target.length,at+target.length+after.length);
+        if(before&&left===before)score+=4;if(after&&right===after)score+=4;
+        if(quote&&chunk.text.startsWith(quote))score+=2;
+        candidates.push({index,charOffset:at,score});
+      }
+    }
+    if(!candidates.length&&quote){for(const [index,chunk]of chunks.entries()){const at=chunk.text.indexOf(quote);if(at>=0)candidates.push({index,charOffset:at+offset,score:1});}}
+    // A paragraph can be split into different chunks or acquire new whitespace.
+    if(!candidates.length&&target.length>=8){
+      const normalize=text=>text.replace(/\s+/g,' ').trim();
+      const source=chunks.map(chunk=>chunk.text).join(' ');const spans=[];let normalized='';
+      for(let i=0;i<source.length;i++){if(/\s/.test(source[i])){if(normalized.endsWith(' '))continue;normalized+=' ';}else normalized+=source[i];spans.push(i);}
+      const needle=normalize(target);let at=-1;
+      while((at=normalized.indexOf(needle,at+1))>=0){
+        const absolute=spans[at];let index=0,start=0;while(index<chunks.length-1&&start+chunks[index].text.length<=absolute){start+=chunks[index].text.length+1;index++;}
+        const before=normalize(String(anchor.before||''));const after=normalize(String(anchor.after||''));let score=0;
+        if(before&&normalized.slice(0,at).trimEnd().endsWith(before))score+=4;
+        if(after&&normalized.slice(at+needle.length).trimStart().startsWith(after))score+=4;
+        candidates.push({index,charOffset:Math.max(0,absolute-start),score});
+      }
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    if(candidates.length===1||(candidates[0]&&candidates[0].score>candidates[1].score)){
+      const point=candidates[0];const unchanged=chunks[point.index].text.startsWith(quote)&&point.charOffset===offset;
+      return {index:point.index,anchor:{...anchor,charOffset:point.charOffset,seconds:unchanged?anchor.seconds:0},repaired:!unchanged};
+    }
+    if(candidates.length>1)throw new Error('Kayıtlı metin birden fazla yerde bulundu. Konumu başlıktan seçin.');
+    throw new Error('Kayıtlı metin artık bu sayfada bulunamıyor. Yazıyı baştan başlatabilirsiniz.');
+  }
   function dictionary(text) {
     const rules = [];
     for (const line of String(text).split(/\r?\n/).map(line => line.trim()).filter(Boolean)) {
@@ -195,15 +238,46 @@
   }
   function mount(root) {
     root.classList.add("reading-library");
+    const groups = [['records','Kayıtlar'],['documents','Belgeler'],['statistics','İstatistikler'],['management','Yönetim']];
+    const tabPrefix = `library-${crypto.randomUUID()}`;
     root.innerHTML = `<div class="library-current" role="status">Sayfa bilgisi alınıyor…</div>
-      <div class="library-buttons"><button type="button" class="pref-button" data-library="resume">Kaldığım yerden devam et</button><button type="button" class="pref-button" data-library="bookmark">Yer imi ekle</button><button type="button" class="pref-button" data-library="focus">Odak görünümü</button><button type="button" class="pref-button" data-library="export">MP3 indir</button><button type="button" class="pref-button" data-library="cancelExport" hidden>İndirmeyi iptal et</button></div>
+      <div class="library-buttons"><button type="button" class="pref-button" data-library="resume">Kaldığım yerden devam et</button><button type="button" class="pref-button" data-library="bookmark">Yer imi ekle</button></div>
       <div class="library-export" role="status"></div>
-      <label class="library-search">Kitaplıkta ara<input type="search" placeholder="Başlık, not, adres veya etiket" aria-label="Kitaplıkta ara"></label>
+
+      <div class="pref-tabs library-tabs" role="tablist" aria-label="Kitaplık grupları">${groups.map(([key,label],index)=>`<button type="button" class="pref-tab" role="tab" id="${tabPrefix}-tab-${key}" data-library-tab="${key}" aria-controls="${tabPrefix}-panel-${key}" aria-selected="${index===0}" tabindex="${index===0?0:-1}">${label}</button>`).join('')}</div>
+      ${groups.map(([key])=>`<section class="library-panel" role="tabpanel" id="${tabPrefix}-panel-${key}" data-library-panel="${key}" aria-labelledby="${tabPrefix}-tab-${key}" ${key==='records'?'':'hidden'}></section>`).join('')}
+      <div class="library-feedback" role="status"></div>`;
+    root.querySelector('[data-library-panel="records"]').innerHTML = `      <label class="library-search">Kitaplıkta ara<input type="search" placeholder="Başlık, not, adres veya etiket" aria-label="Kitaplıkta ara"></label>
       <details><summary>Yer imleri</summary><ul class="library-bookmarks"></ul></details>
       <details><summary>Okuma listesi</summary><div class="library-buttons"><button type="button" class="pref-button" data-library="queueCurrent">Bu sayfayı ekle</button><button type="button" class="pref-button" data-library="queueStart">Sırayı başlat</button><button type="button" class="pref-button" data-library="queueStop">Sırayı durdur</button></div><div class="library-url"><input type="url" placeholder="https://…" aria-label="Okuma listesine eklenecek adres"><button type="button" class="pref-button" data-library="queueAdd">Adresi ekle</button></div><ul class="library-queue"></ul></details>
-      <details><summary>Okunmayacak alanlar</summary><button type="button" class="pref-button" data-library="pickExclude">Sayfadan alan seç</button><ul class="library-exclusions"></ul></details>
+<div class="library-buttons"><button type="button" class="pref-button" data-library="focus">Odak görünümü</button></div>`;
+    root.querySelector('[data-library-panel="documents"]').innerHTML = `<div class="library-buttons"><button type="button" class="pref-button" data-library="export">MP3 indir</button><button type="button" class="pref-button" data-library="cancelExport" hidden>İndirmeyi iptal et</button></div>`;
+    root.querySelector('[data-library-panel="management"]').innerHTML = `      <details><summary>Okunmayacak alanlar</summary><button type="button" class="pref-button" data-library="pickExclude">Sayfadan alan seç</button><ul class="library-exclusions"></ul></details>
       <details><summary>Telaffuz sözlüğü</summary><label>Sözcük = okunuş<textarea rows="4" class="library-dictionary" placeholder="OpenAI = Open ey ay\nTBMM = Türkiye Büyük Millet Meclisi" aria-label="Telaffuz sözlüğü"></textarea></label><button type="button" class="pref-button" data-library="dictionary">Sözlüğü kaydet</button></details>
-      <div class="library-feedback" role="status"></div>`;
+`;
+    function activateGroup(key, focus=false) {
+      if(!groups.some(([id])=>id===key))return;
+      globalThis.SesliOkuSettings?.closeDropdowns();
+      for(const tab of root.querySelectorAll('[data-library-tab]')){
+        const selected=tab.dataset.libraryTab===key;
+        tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;
+        if(selected&&focus)tab.focus();
+      }
+      for(const panel of root.querySelectorAll('[data-library-panel]'))panel.hidden=panel.dataset.libraryPanel!==key;
+      const scroller=root.closest('.preferences');if(scroller)scroller.scrollTop=0;
+      root.dispatchEvent(new CustomEvent('library-group-change',{bubbles:true,detail:key}));
+    }
+    const onTabClick=event=>{const tab=event.target.closest('[data-library-tab]');if(tab)activateGroup(tab.dataset.libraryTab);};
+    const onTabKey=event=>{
+      const tab=event.target.closest('[data-library-tab]');
+      if(!tab||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+      event.preventDefault();event.stopPropagation();
+      const index=groups.findIndex(([key])=>key===tab.dataset.libraryTab);
+      const next=event.key==='Home'?0:event.key==='End'?groups.length-1:(index+(event.key==='ArrowRight'?1:groups.length-1))%groups.length;
+      activateGroup(groups[next][0],true);
+    };
+    const onActivate=event=>activateGroup(event.detail);
+    root.addEventListener('click',onTabClick);root.addEventListener('keydown',onTabKey);root.addEventListener('library-activate',onActivate);
     let context = null; const drafts=new Map();
     const feedback = text => { root.querySelector(".library-feedback").textContent = text; };
     const button = (label, actionName, args = {}) => { const node = document.createElement("button"); node.type = "button"; node.className = "pref-button"; node.textContent = label; node.dataset.library = actionName; node._libraryArgs = args; return node; };
@@ -267,7 +341,7 @@
       } catch (error) { feedback(error.message); }
     });
     const toolsUi = globalThis.SesliOkuTools?.mount(root, { action, feedback, button, context: () => context, refresh });
-    return { dispose() { unsubscribe(); unsubscribeSettings(); toolsUi?.dispose(); } };
+    return { activateGroup, dispose() { root.removeEventListener('click',onTabClick);root.removeEventListener('keydown',onTabKey);root.removeEventListener('library-activate',onActivate);unsubscribe(); unsubscribeSettings(); toolsUi?.dispose(); } };
   }
   const css = `
     @layer base, themes, preferences, experience;
@@ -277,7 +351,10 @@
       .library-current, .library-export, .library-feedback { margin-bottom: 7px; }
       .library-buttons, .library-url { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; }
       .library-item { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-      .reading-library input:is([type="search"],[type="text"]) { box-sizing: border-box; min-width: 0; width: 100%; padding: 5px; font: inherit; color: inherit; background: var(--panel, #242a24); border: 1px solid var(--border, #56604a); user-select: text; -webkit-user-select: text; }
+      .reading-library input:is([type="search"],[type="text"],[type="number"]) { box-sizing: border-box; min-width: 0; width: 100%; padding: 5px; font: inherit; color: inherit; background: var(--panel, #242a24); border: 1px solid var(--border, #56604a); user-select: text; -webkit-user-select: text; }
+      .library-tabs { flex-wrap:wrap; margin:8px 0 0; }
+      .library-panel { min-width:0; }
+      .library-panel[hidden] { display:none !important; }
       .reading-library details { margin-top: 10px; }
       .reading-library summary { cursor: pointer; }
       .reading-library ul { margin: 7px 0; padding: 0; list-style: none; }
@@ -294,11 +371,13 @@
       .playback-strip button { display: grid; place-items: center; box-sizing: border-box; width: auto; height: 25px; min-height: 25px; padding: 0 7px; flex: none; font-size: 11px; border-radius: var(--theme-radius, 5px); background: var(--theme-button, #ffffff12); }
       .playback-strip input { flex: 1; min-width: 30px; width: 100%; }
       .playback-strip output { flex: none; font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-      .repeat-controls { padding: 0 12px 6px; font-size: 11px; }
-      .repeat-controls button { width: auto; height: auto; min-height: 25px; padding: 4px 8px; font: inherit; }
+      .repeat-controls, .reading-sections { padding: 0 12px 6px; font-size: 11px; }
+      .repeat-controls button, .reading-sections button { width: auto; height: auto; min-height: 25px; padding: 4px 8px; font: inherit; }
       .backup-file { max-width: 170px; }
       .focus-reader { margin: 0 6px 8px; border: 1px solid var(--border, #56604a); background: var(--panel, #242a24); color: var(--text, #f7f7f5); }
       .focus-reader[hidden], .playback-strip [hidden] { display: none; }
+      .reading-sections-list { max-height: 220px; overflow: auto; }
+      .reading-sections label { display:flex;align-items:center;gap:6px;flex:1; }
       .focus-heading { display: flex; align-items: center; gap: 12px; padding: 10px 16px; font: inherit; border-bottom: 1px solid var(--border, #56604a); }
       .focus-heading h2 { flex: 1; min-width: 0; font: inherit; font-weight: 700; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
       .focus-heading button { width: auto; height: 25px; min-height: 25px; padding: 0 8px; font-size: 11px; }
@@ -313,5 +392,5 @@
     }
   `;
   globalThis.SesliOkuLibrary = Object.freeze({ ready, pageKey, queueUrl, mutate, css, action, subscribe, dictionary, pronounce, mapBoundaries, detectLanguage, stripMp3Tags, mount,
-    clean, tags, siteOrigin, current: () => data, isReady: () => loaded });
+    clean, tags, siteOrigin, resolveAnchor, current: () => data, isReady: () => loaded });
 })();

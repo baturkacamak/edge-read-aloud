@@ -1,0 +1,72 @@
+/** Exercises the six additions through the real extension worker and reader. */
+export async function checkAdditions({evalIso,check,waitFor,WAIT,open,extensionId,pageCdp}) {
+  console.log('\n  Sections, media controls, relocation, statistics, sync and local OCR');
+  await pageCdp.send('Page.bringToFront');
+  await evalIso(`__sesliOkuTest.stop();SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:false})`,true);
+  const repaired=await evalIso(`(()=>{const old='Eski giriş. Hedef cümle burada başlar ve yeterince uzun bir metin olarak devam eder. Son bölüm.';const at=old.indexOf('Hedef');const a={quote:old.slice(0,220),charOffset:at,target:old.slice(at,at+80),before:old.slice(0,at),after:old.slice(at+80,at+180)};return SesliOkuLibrary.resolveAnchor(a,[{text:'YENİ EKLENEN PARAGRAF. '+old}]);})()`);
+  check('smart bookmark relocation preserves the target word after a paragraph edit',repaired.repaired&&repaired.anchor.charOffset===35);
+  check('bookmark relocation crosses new chunk boundaries and normalizes whitespace',await evalIso(`(()=>{const target='Hedef cümle burada başlar ve bu metin başka bir paragrafa bölünebilir.';const result=SesliOkuLibrary.resolveAnchor({quote:target,charOffset:0,target},[{text:'Yeni giriş. Hedef   cümle burada'},{text:'başlar ve bu metin başka bir paragrafa bölünebilir.'}]);return result.index===0&&result.anchor.charOffset===12;})()`));
+  check('ambiguous bookmark matches are rejected instead of guessing',await evalIso(`(()=>{try{SesliOkuLibrary.resolveAnchor({quote:'Aynı paragraf burada bulunuyor.',charOffset:0},[{text:'Aynı paragraf burada bulunuyor.'},{text:'Aynı paragraf burada bulunuyor.'}]);return false;}catch{return true;}})()`));
+  await evalIso(`(()=>{const article=document.createElement('article');article.id='section-fixture';article.innerHTML='<h2>Birinci bölüm</h2><p id="section-one">Birinci bölümün okunabilir uzun metni burada yer almaktadır.</p><h2>İkinci bölüm</h2><p id="section-two">İkinci bölümün seçilerek okunabilecek uzun metni burada yer almaktadır.</p><h2>Üçüncü bölüm</h2><p id="section-three">Üçüncü bölümün seçilerek okunabilecek uzun metni burada yer almaktadır.</p>';document.body.append(article);__sesliOkuTest.syntheticAudio(240);__sesliOkuTest.startBlocks(['#section-one','#section-two','#section-three']);__sesliOkuTest.pause();const root=document.querySelector('#sesli-oku-host').shadowRoot;root.querySelector('[data-experience="sections"]').click();})()`);
+  await waitFor('reading sections',()=>evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelectorAll('[data-section]').length===3`));
+  check('page headings form a navigable table of contents',await evalIso(`__sesliOkuTest.experience().sections.map(item=>item.title).join('|')==='Birinci bölüm|İkinci bölüm|Üçüncü bölüm'`));
+  await evalIso(`(()=>{const root=document.querySelector('#sesli-oku-host').shadowRoot;root.querySelector('[data-section="1"]').checked=false;root.querySelector('[data-read-sections]').click();})()`);
+  await waitFor('selected sections finish',()=>evalIso(`!__sesliOkuTest.snapshot().playing`));
+  check('selected section playback skips unchecked sections',await evalIso(`(()=>{const played=__sesliOkuTest.snapshot().testPlayed.map(item=>item.id);return played.includes('section-one')&&played.includes('section-three')&&!played.includes('section-two');})()`));
+  await evalIso(`(()=>{window.__mediaHandlers={};window.__originalMediaHandler=navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);navigator.mediaSession.setActionHandler=(action,handler)=>{__mediaHandlers[action]=handler;__originalMediaHandler(action,handler);};__sesliOkuTest.syntheticAudio(20000);__sesliOkuTest.startBlocks(['#section-one','#section-two']);})()`);
+  await waitFor('media session handlers',()=>evalIso(`typeof __mediaHandlers.pause==='function'`));
+  check('system media metadata names the current page',await evalIso(`navigator.mediaSession.metadata.title===document.title&&navigator.mediaSession.playbackState==='playing'`));
+  await evalIso(`__mediaHandlers.pause()`);await WAIT(450);
+  check('system pause controls the real player',await evalIso(`__sesliOkuTest.snapshot().paused&&navigator.mediaSession.playbackState==='paused'`));
+  await evalIso(`SesliOkuLibrary.action('stats',{clear:true})`,true);await WAIT(500);
+  const pauseStats=await evalIso(`SesliOkuLibrary.action('stats')`,true);
+  check('paused time is excluded from listening statistics',pauseStats.stats.today.seconds<.4);
+  await evalIso(`__mediaHandlers.play()`);await WAIT(1100);await evalIso(`__mediaHandlers.pause()`);
+  const activeStats=await evalIso(`SesliOkuLibrary.action('stats')`,true);
+  check('actual listening time is recorded locally',activeStats.stats.today.seconds>.6&&activeStats.stats.today.seconds<2);
+  await evalIso(`__mediaHandlers.seekforward({seekOffset:4})`);await WAIT(100);
+  check('media seek actions move the reading timeline',await evalIso(`__sesliOkuTest.experience().elapsed>=4`));
+  await evalIso(`__mediaHandlers.stop()`);
+  check('stop releases system media handlers',await evalIso(`!__sesliOkuTest.experience().mediaOwned&&navigator.mediaSession.playbackState==='none'&&__mediaHandlers.play===null`));
+  await evalIso(`navigator.mediaSession.setActionHandler=__originalMediaHandler;document.querySelector('#section-fixture').remove()`);
+  const goal=await evalIso(`SesliOkuLibrary.action('stats',{goal:180})`,true);
+  check('weekly listening goals persist',goal.stats.weeklyGoal===180);
+  const config=await evalIso(`chrome.storage.local.get('syncConfig')`,true);
+  check('account synchronization is disabled by default',!config.syncConfig?.enabled);
+  await evalIso(`SesliOkuLibrary.action('syncEnable',{enabled:true})`,true);
+  const remote=await evalIso(`chrome.storage.sync.get(null)`,true);
+  await evalIso(`SesliOkuLibrary.action('syncNow')`,true);
+  const stableRemote=await evalIso(`chrome.storage.sync.get(null)`,true);
+  check('unchanged synchronization snapshots do not cause cross-device echo loops',remote['sesliOku.sync.head'].hash===stableRemote['sesliOku.sync.head'].hash);
+  check('opt-in synchronization creates a checksummed, quota-bounded account snapshot',remote['sesliOku.sync.head']?.version===1&&Object.entries(remote).every(([key,value])=>new TextEncoder().encode(key+JSON.stringify(value)).length<8192));
+  await evalIso(`SesliOkuLibrary.mutate({type:'progress',url:'https://sync-test.invalid/article',title:'Newer local',anchor:{quote:'A portable saved paragraph for account sync.',charOffset:0},completed:false})`,true);
+  await evalIso(`SesliOkuLibrary.action('syncNow')`,true);
+  // Simulate another device's snapshot: update the compressed account data, not the local library.
+  await evalIso(`(async()=>{const saved=await chrome.storage.sync.get(null);const head=saved['sesliOku.sync.head'];let encoded='';for(let i=0;i<head.parts;i++)encoded+=saved['sesliOku.sync.'+i];const bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));const payload=JSON.parse(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text());payload.backup.library.pages['https://remote-device.invalid/article']={url:'https://remote-device.invalid/article',title:'Other device',anchor:{quote:'Remote reading position from another device.',charOffset:3},updated:Date.now()+5000};payload.backup.settings.rate=27;payload.fields.settings=Date.now()+5000;const compressed=new Uint8Array(await new Response(new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());let binary='';for(const byte of compressed)binary+=String.fromCharCode(byte);const packed=btoa(binary);const parts=Math.ceil(packed.length/7000);const values={};for(let i=0;i<14;i++)values['sesliOku.sync.'+i]=packed.slice(i*7000,(i+1)*7000);const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',compressed))].map(n=>n.toString(16).padStart(2,'0')).join('');values['sesliOku.sync.head']={version:1,parts,hash};await chrome.storage.sync.set(values);await SesliOkuLibrary.action('syncNow');})()`,true);
+  check('remote positions merge without deleting newer local pages',await evalIso(`!!SesliOkuLibrary.current().pages['https://remote-device.invalid/article']&&!!SesliOkuLibrary.current().pages['https://sync-test.invalid/article']`));
+  await waitFor('remote preferences apply',()=>evalIso(`SesliOkuSettings.current().rate===27`));
+  check('newer account preferences apply on this device',true);
+  await evalIso(`SesliOkuLibrary.mutate({type:'forget',url:'https://remote-device.invalid/article'});`,true);await WAIT(100);await evalIso(`SesliOkuLibrary.action('syncNow')`,true);
+  check('deleted reading positions stay deleted during sync',await evalIso(`!SesliOkuLibrary.current().pages['https://remote-device.invalid/article']`));
+  await evalIso(`SesliOkuLibrary.mutate({type:'progress',url:'https://remote-device.invalid/article',title:'Read again',anchor:{quote:'Reopened deleted page records a new reading position.',charOffset:0}})`,true);await WAIT(100);await evalIso(`SesliOkuLibrary.action('syncNow')`,true);
+  check('reading a deleted page again creates a new portable position',await evalIso(`SesliOkuLibrary.current().pages['https://remote-device.invalid/article']?.title==='Read again'`));
+  const corrupted=await evalIso(`(async()=>{const saved=await chrome.storage.sync.get('sesliOku.sync.0');await chrome.storage.sync.set({'sesliOku.sync.0':'AAAA'});try{await SesliOkuLibrary.action('syncNow');return false;}catch(error){return error.message.includes('tamamlanmadı');}finally{await chrome.storage.sync.set(saved);}})()`,true);
+  check('incomplete account snapshots report an error and preserve local data',corrupted&&await evalIso(`!!SesliOkuLibrary.current().pages['https://sync-test.invalid/article']`));
+  const localCount=await evalIso(`Object.keys(SesliOkuLibrary.current().pages).length`);
+  await evalIso(`SesliOkuLibrary.action('syncClear')`,true);
+  check('account copy can be removed while preserving local records',await evalIso(`chrome.storage.sync.get(null).then(saved=>!Object.keys(saved).some(key=>key.startsWith('sesliOku.sync.'))&&Object.keys(SesliOkuLibrary.current().pages).length===${localCount})`,true));
+  const reader=await open(`chrome-extension://${extensionId}/src/reader.html?sesliOkuTest=1`);
+  try{
+    await waitFor('OCR reader APIs',()=>reader.evaluate(`typeof SesliOkuOcr==='object'&&typeof SesliOkuDocument.loadFile==='function'`));
+    await reader.client.send('Network.enable');await reader.client.send('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:0,uploadThroughput:0});
+    await reader.evaluate(`(async()=>{document.querySelector('#ocr-language').value='eng';const canvas=document.createElement('canvas');canvas.width=1400;canvas.height=220;const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,1400,220);ctx.fillStyle='black';ctx.font='64px Arial';ctx.fillText('HELLO READER OCR',50,130);window.__ocrImage=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.95));await SesliOkuDocument.loadFile(new File([__ocrImage],'local-ocr.jpg',{type:'image/jpeg'}));})()`);
+    check('bundled OCR reads an actual image with the browser offline',await reader.evaluate(`document.querySelector('#document-text').textContent.includes('HELLO READER OCR')`));
+    await reader.evaluate(String.raw`(async()=>{const image=new Uint8Array(await __ocrImage.arrayBuffer());const enc=new TextEncoder();const parts=[];const offsets=[0];let size=0;function add(value){const b=typeof value==='string'?enc.encode(value):value;parts.push(b);size+=b.length;}add('%PDF-1.4\n');const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 700 110] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >>'];for(let i=0;i<objects.length;i++){offsets.push(size);add((i+1)+' 0 obj\n'+objects[i]+'\nendobj\n');}const stream='q 700 0 0 110 0 0 cm /Im Do Q';offsets.push(size);add('4 0 obj\n<< /Length '+stream.length+' >>\nstream\n'+stream+'\nendstream\nendobj\n');offsets.push(size);add('5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1400 /Height 220 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+image.length+' >>\nstream\n');add(image);add('\nendstream\nendobj\n');const xref=size;add('xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF');document.querySelector('#ocr-enabled').checked=true;await SesliOkuDocument.loadFile(new File(parts,'scanned-ocr.pdf',{type:'application/pdf'}));})()`);
+    check('scanned PDF pages render locally and pass through OCR',await reader.evaluate(`document.querySelector('#document-text').textContent.includes('HELLO READER OCR')&&SesliOkuDocument.book.format==='pdf'`));
+    await reader.evaluate(`(async()=>{const task=SesliOkuDocument.loadFile(new File([__ocrImage],'cancel-ocr.jpg',{type:'image/jpeg'}));document.querySelector('#document-cancel').click();try{await task;}catch{};})()`);
+    if(process.env.ADDITIONS_SCREENSHOT)await reader.client.send('Page.captureScreenshot').then(result=>import('node:fs').then(fs=>fs.writeFileSync('/tmp/reading-additions.png',Buffer.from(result.data,'base64'))));
+    check('canceling OCR preserves the previously opened document',await reader.evaluate(`document.querySelector('#document-text').textContent.includes('HELLO READER OCR')&&!document.querySelector('#read-document').disabled&&document.querySelector('#document-cancel').disabled`));
+  }finally{await reader.close();}
+  await pageCdp.send('Page.bringToFront');
+  await evalIso(`__sesliOkuTest.stop();SesliOkuSettings.update(SesliOkuSettings.defaults)`,true);
+}

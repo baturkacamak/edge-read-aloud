@@ -54,3 +54,13 @@ PDF JavaScript scripting and dynamic evaluation are not enabled.
 fflate 0.8.3 — https://github.com/101arrowz/fflate
 Copyright 2020 Arjun Barrett. License: MIT (src/vendor/fflate/LICENSE).
 Used locally for EPUB ZIP extraction; no remote scripts are loaded.
+
+Local OCR
+---------
+Tesseract.js 7.0.0 and tesseract.js-core 7.0.0 — https://github.com/naptha/tesseract.js
+License: Apache-2.0 (src/vendor/tesseract/LICENSE and core/LICENSE).
+The unmodified bundles retain third-party notices in *.LICENSE.txt.
+Turkish and English integer LSTM traineddata from @tesseract.js-data/{tur,eng}
+1.0.0, 4.0.0_best_int — https://github.com/naptha/tessdata
+Language model license: Apache-2.0 (src/vendor/tesseract/lang/LICENSE).
+All OCR code and models are local; no CDN or document upload is used.

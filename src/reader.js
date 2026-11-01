@@ -7,7 +7,9 @@ const preferences=globalThis.SesliOkuSettings;
 const article=document.getElementById('document-text');const status=document.getElementById('reader-status');const read=document.getElementById('read-document');const resume=document.getElementById('resume-document');const sections=document.getElementById('document-section');
 sections.parentElement.classList.add('preferences');
 const sectionDropdown=preferences.enhanceSelect(sections);
-let generation=0;
+let generation=0;let activeLoad=null;
+const cancel=document.getElementById('document-cancel');cancel.addEventListener('click',()=>activeLoad?.abort());
+preferences.enhanceSelect(document.getElementById('ocr-language'));
 const report=text=>{status.textContent=text;};
 function appendText(chunks,value,heading=''){let first=true;while(value.length){let end=Math.min(value.length,4000);if(end<value.length){const gap=value.lastIndexOf(' ',end);if(gap>2000)end=gap;}const text=value.slice(0,end).trim();if(text)chunks.push({text,heading:first?heading:''});first=false;value=value.slice(end).trimStart();}}
 const clean=text=>String(text||'').replace(/\s+/g,' ').trim();
@@ -34,21 +36,33 @@ async function epub(bytes){
   }
   if(!chunks.length)throw new Error('EPUB içinde okunabilir metin yok.');return {title,chunks};
 }
-async function pdf(bytes,token){
+async function pdf(bytes,token,options,signal){
+  let ocr=null;
   const task=pdfjs.getDocument({data:bytes,isEvalSupported:false,useWasm:false,disableFontFace:true,cMapUrl:chrome.runtime.getURL('src/vendor/pdfjs/cmaps/'),cMapPacked:true,standardFontDataUrl:chrome.runtime.getURL('src/vendor/pdfjs/standard_fonts/')});
   task.onPassword=update=>{const form=document.getElementById('pdf-password');form.hidden=false;form.onsubmit=event=>{event.preventDefault();const input=form.querySelector('input');update(input.value);input.value='';form.hidden=true;};document.getElementById('password-cancel').onclick=()=>{task.destroy();form.hidden=true;};};
-  let doc;try{doc=await task.promise;
+  const abort=()=>{task.destroy().catch(()=>{});document.getElementById('pdf-password').hidden=true;};signal.addEventListener('abort',abort,{once:true});
+  let doc;try{doc=await SesliOkuOcr.abortable(task.promise,signal);
     if(doc.numPages>1000)throw new Error('PDF en fazla 1000 sayfa olabilir.');const chunks=[];let characters=0;
-    for(let page=1;page<=doc.numPages;page++){
+    const first=options.ocr?options.first:1;const last=options.ocr?(options.last||doc.numPages):doc.numPages;
+    if(first>last||last>doc.numPages)throw new Error('PDF sayfa aralığı geçersiz.');
+    if(options.ocr&&last-first+1>20)throw new Error('OCR en fazla 20 sayfa işler. PDF sayfa aralığını daraltın.');
+    for(let page=first;page<=last;page++){
       if(token!==generation)throw new Error('Belge açma iptal edildi.');report(`PDF metni hazırlanıyor: ${page}/${doc.numPages}`);
-      const data=await(await doc.getPage(page)).getTextContent();const lines=[];let current='',previousY=null;
+      const pdfPage=await doc.getPage(page);const data=await pdfPage.getTextContent();const lines=[];let current='',previousY=null;
       for(const item of data.items){if(!('str'in item))continue;const y=item.transform[5];if(previousY!==null&&Math.abs(y-previousY)>3&&current){lines.push(clean(current));current='';}current+=item.str+(item.hasEOL?'\n':' ');previousY=y;if(item.hasEOL&&current){lines.push(clean(current));current='';}}
-      if(current)lines.push(clean(current));const text=clean(lines.join(' '));characters+=text.length;if(characters>5_000_000)throw new Error('PDF metni çok uzun.');
+      if(current)lines.push(clean(current));let text=clean(lines.join(' '));
+      if(!text&&options.ocr){
+        if(!ocr)ocr=await SesliOkuOcr.create(options.language,signal,report);
+        signal.throwIfAborted();const viewport=pdfPage.getViewport({scale:1});const scale=Math.min(2.5,8192/viewport.width,8192/viewport.height,Math.sqrt(12_000_000/(viewport.width*viewport.height)));const view=pdfPage.getViewport({scale});
+        const canvas=document.createElement('canvas');canvas.width=Math.ceil(view.width);canvas.height=Math.ceil(view.height);
+        try{await SesliOkuOcr.abortable(pdfPage.render({canvasContext:canvas.getContext('2d'),viewport:view,background:'white'}).promise,signal);text=clean(await ocr.recognize(canvas));}finally{canvas.width=0;canvas.height=0;}
+      }
+      pdfPage.cleanup();characters+=text.length;if(characters>5_000_000)throw new Error('PDF metni çok uzun.');
       appendText(chunks,text,`Sayfa ${page}`);
     }
-    if(!chunks.length)throw new Error('PDF metin katmanı içermiyor. Taranmış sayfalar için OCR gerekir.');
+    if(!chunks.length)throw new Error('PDF metin katmanı içermiyor. Taranmış sayfalar için OCR seçeneğini açıp dosyayı yeniden seçin.');
     const metadata=await doc.getMetadata().catch(()=>null);return {title:clean(metadata?.info?.Title)||'PDF',chunks};
-  }finally{if(doc)await doc.destroy();else await task.destroy();document.getElementById('pdf-password').hidden=true;}
+  }finally{signal.removeEventListener('abort',abort);if(ocr)await ocr.close();if(doc)await doc.destroy();else await task.destroy();document.getElementById('pdf-password').hidden=true;}
 }
 async function render(book){
   if(book.status!=='ready')throw new Error('Bu kayıt henüz hazırlanıyor.');
@@ -64,21 +78,36 @@ async function render(book){
   const entry=library.current().pages[library.pageKey(location.href)];resume.disabled=!entry?.anchor||entry.completed;
   report(book.kind==='audio'?'Çevrimdışı kayıt hazır. Ses, perde ve telaffuz hazırlama anındaki ayarlardadır; oynatma hızı değiştirilebilir.':`${book.title} · ${book.chunks.length} metin bölümü · Sesli okumada internet kullanılır.`);
 }
+async function image(bytes,options,signal){
+  const bitmap=await createImageBitmap(new Blob([bytes]));let ocr;
+  try{if(bitmap.width*bitmap.height>40_000_000)throw new Error('Görsel en fazla 40 megapiksel olabilir.');const scale=Math.min(1,8192/bitmap.width,8192/bitmap.height,Math.sqrt(12_000_000/(bitmap.width*bitmap.height)));const canvas=document.createElement('canvas');canvas.width=Math.ceil(bitmap.width*scale);canvas.height=Math.ceil(bitmap.height*scale);const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);ocr=await SesliOkuOcr.create(options.language,signal,report);const text=clean(await ocr.recognize(canvas));canvas.width=0;canvas.height=0;if(!text)throw new Error('OCR okunabilir metin bulamadı. Daha net bir görsel deneyin.');const chunks=[];appendText(chunks,text,'Görsel metni');return {title:'OCR',chunks};}finally{bitmap.close();if(ocr)await ocr.close();}
+}
 async function loadFile(file){
-  if(!file) return;if(file.size>50*1024*1024)throw new Error('Dosya en fazla 50 MB olabilir.');const token=++generation;read.disabled=true;resume.disabled=true;if(api.book)await chrome.runtime.sendMessage({target:'background',type:'STOP_ACTIVE'});if(document.documentElement.dataset.bookReady==='true'){const pending=Promise.withResolvers();api.ready=pending.promise;api.resolve=pending.resolve;}document.documentElement.dataset.bookReady='false';report('Belge açılıyor…');
-  const bytes=new Uint8Array(await file.arrayBuffer());const hash=await crypto.subtle.digest('SHA-256',bytes);const id='document-'+[...new Uint8Array(hash)].map(byte=>byte.toString(16).padStart(2,'0')).join('');const cached=await vault.get(id);if(cached){await render(cached);return;}
-  const extension=file.name.split('.').pop().toLowerCase();if(!['pdf','epub'].includes(extension))throw new Error('PDF veya EPUB seçin.');
-  const parsed=extension==='pdf'?await pdf(bytes,token):await epub(bytes);if(token!==generation)return;
-  const title=parsed.title==='PDF'||parsed.title==='EPUB'?file.name.replace(/\.[^.]+$/,''):parsed.title;
-  const book={id,title,chunks:parsed.chunks,created:Date.now(),kind:'document',format:extension,status:'ready',size:parsed.chunks.reduce((size,chunk)=>size+chunk.text.length*2,0)};
-  await vault.put(book);await render(book);
+  if(!file)return;if(file.size>50*1024*1024){report('Dosya en fazla 50 MB olabilir.');throw new Error('Dosya en fazla 50 MB olabilir.');}
+  const options={ocr:document.getElementById('ocr-enabled').checked,language:document.getElementById('ocr-language').value,first:Number(document.getElementById('ocr-first').value)||1,last:Number(document.getElementById('ocr-last').value)||0};
+  if(!Number.isInteger(options.first)||!Number.isInteger(options.last)||options.first<1||options.last<0){report('PDF sayfa aralığı geçersiz.');throw new Error('PDF sayfa aralığı geçersiz.');}
+  activeLoad?.abort();const controller=new AbortController();activeLoad=controller;const signal=controller.signal;const token=++generation;
+  read.disabled=true;resume.disabled=true;sections.disabled=true;sectionDropdown.sync();cancel.disabled=false;
+  try{
+    if(api.book)await chrome.runtime.sendMessage({target:'background',type:'STOP_ACTIVE'});
+    if(document.documentElement.dataset.bookReady==='true'){const pending=Promise.withResolvers();api.ready=pending.promise;api.resolve=pending.resolve;}document.documentElement.dataset.bookReady='false';report('Belge açılıyor…');
+    const bytes=new Uint8Array(await file.arrayBuffer());const extension=file.name.split('.').pop().toLowerCase();const images=['png','jpg','jpeg','webp','bmp'];
+    if(!['pdf','epub',...images].includes(extension))throw new Error('PDF, EPUB, PNG, JPEG, WebP veya BMP seçin.');
+    const salt=(images.includes(extension)||options.ocr&&extension==='pdf')?new TextEncoder().encode(JSON.stringify(options)):new Uint8Array();const input=new Uint8Array(bytes.length+salt.length);input.set(bytes);input.set(salt,bytes.length);
+    const hash=await crypto.subtle.digest('SHA-256',input);const id='document-'+[...new Uint8Array(hash)].map(byte=>byte.toString(16).padStart(2,'0')).join('');signal.throwIfAborted();const cached=await vault.get(id);if(cached){signal.throwIfAborted();await render(cached);return;}
+    const parsed=extension==='pdf'?await pdf(bytes,token,options,signal):extension==='epub'?await epub(bytes):await image(bytes,options,signal);signal.throwIfAborted();if(token!==generation)return;
+    const title=['PDF','EPUB','OCR'].includes(parsed.title)?file.name.replace(/\.[^.]+$/,''):parsed.title;
+    const book={id,title,chunks:parsed.chunks,created:Date.now(),kind:'document',format:extension,status:'ready',size:parsed.chunks.reduce((size,chunk)=>size+chunk.text.length*2,0)};
+    await vault.put(book);signal.throwIfAborted();await render(book);
+  }catch(error){if(token===generation){if(api.book){read.disabled=false;sections.disabled=false;sectionDropdown.sync();const entry=library.current().pages[library.pageKey(location.href)];resume.disabled=!entry?.anchor||entry.completed;document.documentElement.dataset.bookReady='true';api.resolve();}report(signal.aborted?'Belge açma iptal edildi.':error.message);}throw error;}
+  finally{if(token===generation){cancel.disabled=true;activeLoad=null;}}
 }
 api.loadFile=loadFile;api.loadBook=async id=>{const book=await vault.get(id);if(!book)throw new Error('Yerel kayıt bulunamadı; özgün belgeyi yeniden içe aktarın.');await render(book);};
 api.audioFor=async(text,chunk)=>{
   const paragraph=chunk?.el?.closest('[data-book-part]');if(!paragraph)throw new Error('Bu bölüm için çevrimdışı ses yok.');const index=Number(paragraph.dataset.bookPart);const part=await vault.getPart(api.book.id,index);if(!part)throw new Error('Yerel ses parçası eksik.');
   const bytes=Uint8Array.from(atob(part.audio),char=>char.charCodeAt(0));return {audio:bytes,boundaries:part.boundaries,sourceOffsets:part.sourceOffsets,voice:api.book.settings?.voice};
 };
-document.getElementById('document-file').addEventListener('change',event=>loadFile(event.target.files[0]).catch(error=>{report(error.message);if(api.book){read.disabled=false;document.documentElement.dataset.bookReady='true';api.resolve();}}));
+document.getElementById('document-file').addEventListener('change',event=>{const file=event.target.files[0];event.target.value='';loadFile(file).catch(()=>{});});
 read.addEventListener('click',async()=>{const result=await chrome.runtime.sendMessage({target:'background',type:'START_PAGE'});if(!result.ok)report(result.error);});
 resume.addEventListener('click',()=>library.action('resume').catch(error=>report(error.message)));
 sections.addEventListener('change',()=>document.getElementById(sections.value)?.scrollIntoView({block:'center',behavior:'smooth'}));

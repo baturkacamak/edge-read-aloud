@@ -170,6 +170,14 @@ profili günceller. Uyku zamanlayıcısı profillere dahil edilmez.
 
 ### Konum, yer imleri ve gelişmiş okuma araçları
 
+Kitaplık paneli dört alt sekmeye ayrılır: **Kayıtlar** (başlıklar, yer imleri,
+okuma listesi), **Belgeler** (dosya açma, çevrimdışı kayıtlar, MP3),
+**İstatistikler** (dinleme süresi ve hedef), **Yönetim** (hariç tutulan alanlar,
+sözlük, site kuralları, eşitleme ve yedekleme). Devam et ve Yer imi ekle tüm
+alt sekmelerin üstünde kalır. Alt sekmeler mevcut temanın sekme stilini kullanır;
+sol/sağ ok, Home ve End ile klavyeden seçilebilir. Gruplar arasında geçerken
+arama, açık bölümler ve kaydedilmemiş not taslakları korunur.
+
 - **Kaldığım yerden devam et:** Konum yaklaşık beş saniyede bir, duraklatırken ve
   durdururken kaydedilir. Kitaplık sekmesinden aynı yazıya geri dönülebilir.
   Metin değişmişse kayıtlı paragraf bulunamadığı bildirilir. Davranış sekmesindeki
@@ -177,18 +185,22 @@ profili günceller. Uyku zamanlayıcısı profillere dahil edilmez.
 - **Yer imleri:** Oynatıcıdaki ★ veya Kitaplık → Yer imi ekle mevcut paragrafı
   ve ses konumunu saklar. Kitaplıktaki Aç/Sil düğmeleriyle yönetilir.
 - **Zaman çizgisi:** −10 sn / +10 sn, oynatma hızına göre on saniye geri/ileri
-  gider; sürgü yazı boyunca gezinir. Henüz üretilmemiş seslerin süreleri
+  gider. Sürgüyü hareket ettirirken okuma geçici olarak durur; kelime vurgusu
+  ve otomatik takip seçilen konumu canlı gösterir. Bırakınca seçilen kelimeden
+  devam eder; önceden duraklatılmış okuma duraklatılmış kalır. Sürükleme sırasında
+  her hareket için ses üretilmez. Escape veya iptal edilen dokunma hareketi önceki
+  konuma döner. Henüz üretilmemiş seslerde kelime konumu ve süreler
   tahminidir; kalan süredeki `~` işareti bunu belirtir. Paragraf arası beklemeler
   süre tahminine dahil değildir.
-- **Okuma listesi:** Kitaplık → Okuma listesi bölümüne bu sayfayı veya bir
+- **Okuma listesi:** Kitaplık → Kayıtlar → Okuma listesi bölümüne bu sayfayı veya bir
   HTTP/HTTPS adresini ekleyin; ↑/↓ ile sıralayın. Sırayı başlat tek bir sekmede
   yazıları art arda okur. Hatalı/boş sayfa atlanır; yüklemede 60 saniye zaman
   aşımı vardır. Sırayı durdur veya okuma sekmesini kapatmak sırayı durdurur.
   Yeniden başlatmak listeyi baştan okur; tarayıcı yeniden açılınca otomatik başlamaz.
-- **Okunmayacak alanlar:** Kitaplıktan alan seçimini açın, sayfada okumadan
+- **Okunmayacak alanlar:** Kitaplık → Yönetim bölümünden alan seçimini açın, sayfada okumadan
   çıkarılacak bölgeye tıklayın; Esc iptal eder. Kural aynı adres için saklanır
   ve Kitaplıktan kaldırılabilir. Sayfanın yapısı değişirse alanı yeniden seçin.
-- **Telaffuz sözlüğü:** Kitaplıktaki düzenleyiciye her satıra `API = ey pi ay`
+- **Telaffuz sözlüğü:** Kitaplık → Yönetim → Telaffuz sözlüğü düzenleyicisine her satıra `API = ey pi ay`
   gibi bir kayıt yazıp kaydedin. En fazla 200 kural desteklenir. Seslendirme
   değişirken sayfadaki özgün sözcük vurgulanmaya devam eder.
 - **Dile göre ses:** Okuma sekmesinde otomatik ses seçimini açıp Türkçe ve
@@ -198,7 +210,7 @@ profili günceller. Uyku zamanlayıcısı profillere dahil edilmez.
 - **Odak görünümü:** Oynatıcıdaki Odak düğmesi metni sade bir okuma alanında
   gösterir. Paragrafa tıklamak veya Enter o noktadan okumayı başlatır.
   Görünüm sekmesinden 16–36 px yazı boyutu ve tema/kâğıt/koyu arka plan seçilir.
-- **MP3 indir:** Kitaplıktan mevcut okuma metni tek MP3 olarak indirilebilir.
+- **MP3 indir:** Kitaplık → Belgeler bölümünden mevcut okuma metni tek MP3 olarak indirilebilir.
   Okuma başlamadıysa sayfa metni kullanılır. Ses, perde, ses düzeyi, sözlük ve
   otomatik dil ayarları uygulanır; oynatma hızı ve paragraf arası bekleme dosyaya
   işlenmez. Ses Microsoft servisinde yeniden hazırlanır; internet gerekir.
@@ -211,7 +223,7 @@ indirmeleri tarayıcının normal indirme ayarlarını kullanır.
 
 ### Site ayarları, çalışma araçları ve belgeler
 
-- **Siteye özel ayarlar:** Kitaplık → Siteye özel ayarlar → Bu sitenin mevcut
+- **Siteye özel ayarlar:** Kitaplık → Yönetim → Siteye özel ayarlar → Bu sitenin mevcut
   ayarlarını kaydet. Ses, hız, tema, renk modu, odak tercihleri ve mevcut
   hariç tutma kuralları aynı site adresinde otomatik uygulanır. Özel ayarlar
   etkinken panelde yaptığınız değişiklikler o siteye yazılır; diğer sitelerin
@@ -229,31 +241,75 @@ indirmeleri tarayıcının normal indirme ayarlarını kullanır.
 - **Gelişmiş odak:** Görünüm sekmesinden serif/sans serif/eş aralıklı yazı
   tipi, satır aralığı (1.2–2.6), metin genişliği (400–1200 px) ve kenar boşluğu
   (8–60 px) seçilir. Aynı tercihler belge okuyucusunda da kullanılır.
-- **Çevrimdışı kitaplık:** Kitaplık → Belgeler ve çevrimdışı kitaplık → Bu
+- **Çevrimdışı kitaplık:** Kitaplık → Belgeler → Belgeler ve çevrimdışı kitaplık → Bu
   okumayı çevrimdışı sakla. Mevcut okuma metni, sesi ve kelime zamanları
   hazırlanır; kayıt tamamlanınca Aç ile internet olmadan dinlenebilir.
   Hazırlama internet gerektirir. Kayıttaki ses, perde ve telaffuz sabittir;
   dinlerken oynatma hızı ve görünüm değiştirilebilir. İptal/sekme kapatma
   yarım ses parçalarını temizler. Yerel belge ve sesler için toplam 250 MB
   sınırı vardır; kayıtlar Kitaplıktaki Sil düğmesiyle kaldırılır.
-- **Yedekleme:** Kitaplık → Yedekleme / geri yükleme → Yedeği indir JSON
+- **Yedekleme:** Kitaplık → Yönetim → Yedekleme / geri yükleme → Yedeği indir JSON
   üretir. Yedeği birleştir geçerli bir yedeği mevcut kayıtlarla birleştirir
   ve yedekteki ayarları uygular. Profiller, sözlük, konumlar, notlar,
   etiketler ve site kuralları dahildir. Çalışan kuyruk ve zamanlayıcı
   aktarılmaz. Ses ve belge dosyaları JSON yedeğine dahil değildir; belge
   yer imleri için özgün dosyayı yeni tarayıcıda yeniden açmak gerekir.
-- **PDF / EPUB:** Kitaplık → Belgeler ve çevrimdışı kitaplık → PDF / EPUB aç
+- **PDF / EPUB:** Kitaplık → Belgeler → Belgeler ve çevrimdışı kitaplık → PDF / EPUB / görsel aç
   ayrı belge okuyucusunu açar. Dosya bu cihazda metne dönüştürülür; sayfa veya
   bölüm seçicisiyle gezinilebilir. EPUB kitap sırasını, PDF metin katmanını
   kullanır. Orijinal sayfa tasarımı yerine sade metin gösterilir. Sesli oku,
   kaldığın yerden devam, kelimeye tıklayarak başlatma ve yer imleri çalışır.
   Dosya başına en fazla 50 MB, PDF için 1000 sayfa/5 milyon karakter ve EPUB
-  için 20 MB çıkarılmış metin/5000 bölüm sınırı vardır. Taranmış PDF için OCR
-  ve DRM korumalı EPUB desteği yoktur. Parolalı PDF parolası bellekte kullanılır,
+  için 20 MB çıkarılmış metin/5000 bölüm sınırı vardır. DRM korumalı EPUB desteği yoktur. Parolalı PDF parolası bellekte kullanılır,
   kaydedilmez. Belge metni yerelde saklanır; yalnızca seslendirme veya ses
   hazırlama seçilince metin Microsoft servisine gönderilir.
 
-PDF.js ve fflate, lisanslarıyla birlikte `src/vendor` içinde paketlenmiştir.
+- **Bölümler / seçerek oku:** Oynatıcıdaki Bölümler düğmesi Kitaplık menüsünü açar; okunan içeriği sayfa
+  başlıklarına göre böler. Buradan oku ile bir başlığa atlayın; kutuları seçip
+  Seçili bölümleri oku ile yalnızca istediğiniz bölümleri dinleyin. Başlıkları
+  yenile tüm sayfayı yeniden tarar. Başlıksız metin Başlangıç altında görünür.
+- **Sistem medya kontrolleri:** Desteklenen tarayıcı/işletim sisteminde medya
+  tuşları ve sistem medya paneli oynat/duraklat/durdur, önceki/sonraki metin
+  parçası ve zaman atlamayı yönetir. Başlık olarak mevcut sayfa gösterilir.
+  Durdurunca uzantının medya eylemleri kaldırılır. İşletim sistemi panelinin
+  varlığı ve hangi tuşları gösterdiği platforma bağlıdır.
+- **Akıllı yer imi onarımı:** Yeni konum kayıtlarında hedef kelimenin çevresindeki
+  metin de tutulur. Paragrafın önüne içerik eklendiğinde, yeri değiştiğinde veya
+  boşluklar/paragraf sınırları değiştiğinde metin yeniden aranır. Birden çok eşit
+  eşleşme varsa yanlış yere atlamak yerine konumu yeniden seçmeniz istenir.
+  Hedef metin tamamen silindiyse otomatik onarım yapılamaz.
+- **Dinleme istatistikleri ve hedef:** Kitaplık → İstatistikler bölümünde bugün ve bu haftanın dinleme
+  süresi, tamamlanan farklı yazılar ve haftalık dakika hedefi bulunur. Son
+  365 gün cihazda tutulur; duraklama ve ses hazırlama süresi sayılmaz. Süre
+  gerçek çalma sırasındaki duvar saatinden yaklaşık hesaplanır, hızla atlanan
+  ses süresi eklenmez. Hedef 0 olursa ilerleme göstergesi gizlenir. İstatistikleri
+  sil düğmesi geçmişi temizler; kayıtlar eşitlenmez ve JSON yedeğine girmez.
+- **Cihazlar arası eşitleme:** Kitaplık → Yönetim bölümünden açılır; başlangıçta kapalıdır.
+  Aynı uzantının aynı kimlikle yüklü olduğu ve uzantı senkronizasyonunun açık
+  olduğu aynı tarayıcı hesabındaki cihazları kullanın. Web konumları, yer imleri,
+  notlar/etiketler, genel tercihler ve profiller tarayıcının `storage.sync`
+  alanına aktarılır. Belge/ses dosyaları, belge yer imleri, site kuralları,
+  hariç tutmalar, kuyruk ve istatistikler yerel kalır. Değişiklikler yaklaşık
+  bir dakika içinde gönderilir; Şimdi eşitle elle tetikler. Konumlar ve yer
+  imleri zaman damgasıyla birleştirilir; genel tercihlerde son değişiklik
+  kullanılır. Diğer cihazda aynı yazıyı açıp Kaldığım yerden devam et düğmesini
+  kullanabilirsiniz. Silinen kayıtlar için sınırlı bir silme günlüğü tutulur (1000 yer
+  imi, 500 konum). Sıkıştırılmış veri yaklaşık 95 KB'ı aşarsa panel hata gösterir
+  ve yerel veriler korunur; JSON yedeği kullanılabilir. Hesaptaki kopyayı sil ve
+  kapat yerel kayıtları silmez. Başka bir cihazda eşitleme açık kalırsa yeniden
+  kopya yükleyebilir; hesabı tamamen temizlemek için önce diğer cihazlarda da
+  kapatın. Tarayıcının hesap sunucuları arasındaki aktarım süresi uzantının
+  kontrolünde değildir.
+- **Yerel OCR:** Belge okuyucusunda PNG/JPEG/WebP/BMP görsel seçin veya taranmış
+  PDF için OCR kutusunu açıp dosyayı yeniden seçin. Türkçe, İngilizce veya her
+  iki dil seçilebilir. PDF'de metin katmanı olan sayfalar doğrudan ayrıştırılır;
+  metinsiz sayfalar tanınır. OCR açıkken en fazla 20 PDF sayfası işlenir; büyük
+  belgelerde ilk/son sayfa aralığını daraltın. Görseller 40 megapikselle sınırlıdır;
+  tanımada en fazla 12 megapiksele ölçeklenir. Motor ve dil modelleri uzantıda
+  paketlidir; internet olmadan çalışır. İptal önceki belgeyi korur. OCR hatalı
+  harfler üretebilir; belge özgün tasarım yerine tanınan metin olarak kaydedilir.
+
+PDF.js, fflate ve Tesseract.js, lisanslarıyla birlikte `src/vendor` içinde paketlenmiştir.
 Çalışma sırasında CDN kullanılmaz. Geliştirmede `npm ci` ardından
 `npm run vendor:readers` bu dosyaları sabitlenmiş sürümlerden yeniden üretir.
 
@@ -368,6 +424,8 @@ flowchart LR
 | `src/tts.js` | WebSocket protokolü, SSML, MP3 ve kelime sınırları |
 | `src/background.js` | Mesaj yönlendirme, ses listesi önbelleği, menüler |
 | `src/library.js` | Yerel kitaplık, kuyruk verisi, telaffuz eşlemesi ve kitaplık paneli |
+| `src/insights.js` | Dinleme istatistikleri ve isteğe bağlı hesap eşitlemesi |
+| `src/ocr.js` | Yerel Tesseract işçisi, dil modelleri ve iptal yönetimi |
 | `src/experience.js` | Zaman çizgisi, konum/yer imi, odak, alan seçimi ve MP3 dışa aktarma |
 | `src/settings.js` | Ortak ayar şeması, sekmeli panel, profiller ve arayüzler arası eşzamanlama |
 | `src/themes.js` | Ortak tema stilleri, tema seçimi, kalıcılık ve arayüzler arası eşzamanlama |
@@ -458,7 +516,14 @@ npm install
 npm test
 ```
 
+Canlı sürgü önizlemesi `SCRUB_ONLY=1 npm test` ile ayrı çalıştırılabilir; gerçek fare sürüklemesi de test edilir.
+
+Hız regresyonunu tek başına çalıştırmak için `SPEED_ONLY=1 npm test` kullanılır.
+[Yeniden üretme ve neden](docs/playback-speed.md) belgesinde önceki/sonraki ölçümler bulunur.
+
 Testler şunları doğrular:
+
+- Oynatma hızının yeni ses parçalarında, duraklatıp devam etmede ve atlamada korunması; gerçek ses hızı ve geçen süreyle doğrulama
 
 - Eski bir eklenti sürümünden kalan oynatıcı/highlight katmanlarının temizlenmesi
 - Aynı anda ikinci bir `#sesli-oku-spotlight` oluşmaması
@@ -594,7 +659,7 @@ tamamı tek dosya olarak tutulmaz.
   Edge dışındaki user-agent'ları reddeder; Chrome/Firefox için yerel bir köprü
   sunucu gerekir.
 - İnternet bağlantısı gerekir; metin Microsoft sunucularına gönderilir.
-- PDF, canvas, gölge DOM ve DRM korumalı içerik desteklenmez.
+- Tarayıcının yerleşik PDF görüntüleyicisinde ve canvas/gölge DOM içeriğinde doğrudan sayfa okuma desteklenmez. PDF ve görselleri yerel belge okuyucusunda açabilirsiniz. DRM korumalı belgeler desteklenmez.
 - Eklenti henüz mağazada yayınlanmadı; kaynak klasörden veya ZIP'ten yüklenir.
 
 > [!NOTE]

@@ -22,6 +22,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { zipSync, strToU8 } from "fflate";
+import { checkAdditions } from "./additions.mjs";
+import { checkScrubbing } from "./scrubbing.mjs";
+import { checkPlaybackSpeed } from "./playback-speed.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EDGE = process.env.EDGE_BIN || "microsoft-edge";
@@ -237,8 +240,35 @@ async function main() {
       await pageCdp.send('Page.bringToFront');
       await evalIso(`__sesliOkuTest.stop(); SesliOkuSettings.update({...SesliOkuSettings.defaults,autoFollow:false})`,true);
       await evalIso(`__sesliOkuTest.syntheticAudio(300);__sesliOkuTest.startBlocks(['#p1','#p2']);__sesliOkuTest.pause();__sesliOkuTest.toggleSettings(true);document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-tab="library"]').click()`);
+      console.log('  Library subgroups');
+      check('library has four scoped tabs with only Records visible initially',await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;return r.querySelectorAll('[data-library-tab]').length===4&&r.querySelectorAll('[data-library-panel]:not([hidden])').length===1&&r.querySelector('[data-library-panel="records"]').hidden===false;})()`));
+      for(const group of ['documents','statistics','management','records']){
+        await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('[data-library-tab="${group}"]').click()`);
+        check(`library ${group} tab isolates its content and keeps quick actions visible`,await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const p=r.querySelector('[data-library-panel="${group}"]');return !p.hidden&&r.querySelectorAll('[data-library-panel]:not([hidden])').length===1&&r.querySelector('[data-library="resume"]').getClientRects().length>0&&r.querySelector('[data-library="bookmark"]').getClientRects().length>0&&r.querySelector('[data-tab="library"]').getAttribute('aria-selected')==='true';})()`));
+      }
+      check('documents and management controls belong to their matching subgroups',await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;return r.querySelector('[data-tool="openReader"]').closest('[data-library-panel]').dataset.libraryPanel==='documents'&&r.querySelector('[data-library="export"]').closest('[data-library-panel]').dataset.libraryPanel==='documents'&&r.querySelector('.sync-enabled').closest('[data-library-panel]').dataset.libraryPanel==='management'&&r.querySelector('.library-dictionary').closest('[data-library-panel]').dataset.libraryPanel==='management';})()`));
+      await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const tab=r.querySelector('[data-library-tab="records"]');tab.focus();tab.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}));})()`);
+      check('subgroup keyboard navigation moves focus without changing the main tab',await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;return r.activeElement.dataset.libraryTab==='management'&&r.activeElement.tabIndex===0&&r.querySelectorAll('[data-library-tab][tabindex="0"]').length===1&&r.querySelector('[data-tab="library"]').getAttribute('aria-selected')==='true';})()`));
+      await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;r.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}));})()`);
+      check('subgroup tabs reuse the themed property-tab classes',await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;return [...r.querySelectorAll('[data-library-tab]')].every(tab=>tab.classList.contains('pref-tab'))&&!r.querySelector('[data-library-panel="records"]').hidden;})()`));
+      for(const theme of ['modern','win95','win98','xp','win7']){
+        await evalIso(`SesliOkuThemes.set('${theme}')`,true);await WAIT(350);
+        check(`library subgroup tabs share the ${theme} selected-tab skin`,await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const main=getComputedStyle(r.querySelector('[data-tab="library"]'));const sub=getComputedStyle(r.querySelector('[data-library-tab="records"]'));return main.backgroundImage===sub.backgroundImage&&main.borderTopColor===sub.borderTopColor&&main.boxShadow===sub.boxShadow&&main.height===sub.height;})()`));
+        const frame=await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const panel=r.querySelector('[data-library-panel="records"]');const outer=r.querySelector('[data-tab="library"]').getAttribute('aria-controls');const main=r.getElementById(outer);const style=getComputedStyle(panel);const mainStyle=getComputedStyle(main);const tabs=r.querySelector('.library-tabs').getBoundingClientRect();return {border:parseFloat(style.borderTopWidth),shadow:style.boxShadow,mainBorder:mainStyle.borderTopWidth,mainShadow:mainStyle.boxShadow,gap:panel.getBoundingClientRect().top-tabs.bottom,padding:parseFloat(style.paddingLeft)};})()`);
+        check(`library ${theme} content has a frame joined to its tabs`,frame.padding>=10&&Math.abs(frame.gap)<=1&&(frame.border>0||frame.shadow!=='none')&&('${theme}'==='modern'||frame.shadow===frame.mainShadow),JSON.stringify(frame));
+        const inset=await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;r.querySelector('[data-library-tab="management"]').click();const input=r.querySelector('.library-dictionary');const detail=input.closest('details');detail.open=true;const title=detail.querySelector(':scope > summary').getBoundingClientRect();const box=detail.getBoundingClientRect();const field=input.getBoundingClientRect();const save=r.querySelector('[data-library="dictionary"]').getBoundingClientRect();const result={left:field.left-box.left,right:box.right-field.right,top:field.top-title.bottom,bottom:box.bottom-save.bottom,headerLeft:title.left-box.left,headerRight:box.right-title.right};detail.open=false;r.querySelector('[data-library-tab="records"]').click();return result;})()`);
+        check(`accordion ${theme} body insets full-width fields and keeps the header flush`,inset.left>=9&&inset.right>=9&&inset.top>=8&&inset.bottom>=9&&Math.abs(inset.headerLeft)<=1&&Math.abs(inset.headerRight)<=1,JSON.stringify(inset));
+      }
+      await evalIso(`SesliOkuThemes.set('modern')`,true);await WAIT(350);
+      if(process.env.LIBRARY_SCREENSHOT){await evalIso(`SesliOkuThemes.set('${process.env.LIBRARY_SCREENSHOT_THEME||'xp'}')`,true);await WAIT(350);writeFileSync('/tmp/library-subtabs.png',Buffer.from((await pageCdp.send('Page.captureScreenshot')).data,'base64'));await evalIso(`SesliOkuThemes.set('modern')`,true);}
+      if(process.env.ACCORDION_SCREENSHOT){await evalIso(`SesliOkuThemes.set('xp')`,true);await WAIT(350);await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;r.querySelector('[data-library-tab="management"]').click();r.querySelector('.library-dictionary').closest('details').open=true;})()`);writeFileSync('/tmp/accordion-padding.png',Buffer.from((await pageCdp.send('Page.captureScreenshot')).data,'base64'));await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;r.querySelector('.library-dictionary').closest('details').open=false;r.querySelector('[data-library-tab="records"]').click();SesliOkuThemes.set('modern');})()`,true);}
       await evalIso(`__sesliOkuTest.libraryAction('bookmark')`,true);
       const bookmarkId=await evalIso(`SesliOkuLibrary.current().bookmarks.at(-1).id`);
+      await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const note=r.querySelector('.library-bookmarks textarea');note.value='Kaydedilmemiş taslak';note.dispatchEvent(new Event('input',{bubbles:true}));r.querySelector('[data-library-tab="documents"]').click();r.querySelector('[data-library-tab="records"]').click();})()`);
+      check('switching library groups preserves an unsaved note draft',await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.library-bookmarks textarea').value==='Kaydedilmemiş taslak'`));
+
+      await evalIso(`document.querySelector('#sesli-oku-host').shadowRoot.querySelector('.library-bookmarks .pref-button').click()`);
+      await WAIT(100);
       await evalIso(`SesliOkuLibrary.action('itemEdit',{collection:'bookmarks',id:${JSON.stringify(bookmarkId)},note:'Çalışma notu <img src=x onerror=alert(1)>',tags:'ders, tekrar, ders'})`,true);
       check('bookmark notes and deduplicated tags persist',await evalIso(`(()=>{const b=SesliOkuLibrary.current().bookmarks.find(b=>b.id===${JSON.stringify(bookmarkId)});return b.note.includes('Çalışma notu')&&b.tags.length===2;})()`));
       const filtered=await evalIso(`(()=>{const r=document.querySelector('#sesli-oku-host').shadowRoot;const q=r.querySelector('[type="search"]');q.value='çalışma notu';q.dispatchEvent(new Event('input',{bubbles:true}));return r.querySelectorAll('.library-bookmarks li').length===1&&!r.querySelector('.library-bookmarks img');})()`);
@@ -334,8 +364,11 @@ async function main() {
       await pageCdp.send('Page.bringToFront');
       await evalIso(`SesliOkuLibrary.action('bookRemove',{id:${JSON.stringify(offlineId)}})`,true);
       check('offline records can be removed from local storage',await evalIso(`SesliOkuLibrary.action('vaultList').then(value=>!value.books.some(book=>book.id===${JSON.stringify(offlineId)}))`,true));
+      await checkAdditions({evalIso,check,waitFor,WAIT,open,extensionId,pageCdp});
       await evalIso(`SesliOkuSettings.update(SesliOkuSettings.defaults);SesliOkuThemes.set('modern');SesliOkuThemes.setMode('original')`,true);
     }
+    if(process.env.SCRUB_ONLY){await checkScrubbing({evalIso,check,waitFor,WAIT,pageCdp});console.log(`\n${passed} passed, ${failed} failed`);if(failed)process.exitCode=1;return;}
+    if(process.env.SPEED_ONLY){await checkPlaybackSpeed({evalIso,check,waitFor,WAIT,pageCdp});console.log(`\n${passed} passed, ${failed} failed`);if(failed)process.exitCode=1;return;}
     if(process.env.ADVANCED_ONLY){await checkAdvancedTools();console.log(`\n${passed} passed, ${failed} failed`);if(failed)process.exitCode=1;return;}
 
     async function checkClickReading() {
@@ -1502,6 +1535,12 @@ async function main() {
     const fadeResult = await evalIso(`(async () => {
       const host = document.querySelector("#sesli-oku-host");
       const root = host.shadowRoot;
+      // Form/layout refinements can make two skins nearly equal in height.
+      // Give the target skin a deterministic height difference so this test
+      // checks interpolation, rather than incidental font/control metrics.
+      const heightFixture=document.createElement('style');
+      heightFixture.textContent='.wrap[data-theme="win95"] { padding-bottom: 40px !important; }';
+      root.append(heightFixture);
       const before = host.getBoundingClientRect().height;
       await SesliOkuThemes.set("win95");
       const copy = root.querySelector("[data-theme-snapshot]");
@@ -1511,7 +1550,9 @@ async function main() {
       const middle = host.getBoundingClientRect().height;
       const fading = parseFloat(getComputedStyle(root.querySelector(".wrap")).opacity);
       await new Promise(resolve => setTimeout(resolve, 350));
-      return { before, middle, after: host.getBoundingClientRect().height, fading, safe,
+      const after=host.getBoundingClientRect().height;
+      heightFixture.remove();
+      return { before, middle, after, fading, safe,
         copies: root.querySelectorAll("[data-theme-snapshot]").length,
         overflow: host.style.overflow,
         active: root.querySelector(".wrap").hasAttribute("data-theme-transition") };
@@ -1827,6 +1868,8 @@ async function main() {
     await checkColorModes();
     await checkExpandedSettingsFollow();
     await checkExperienceFeatures();
+    await checkPlaybackSpeed({evalIso,check,waitFor,WAIT,pageCdp});
+    await checkScrubbing({evalIso,check,waitFor,WAIT,pageCdp});
     await checkAdvancedTools();
 
     console.log(`\n${passed} passed, ${failed} failed`);

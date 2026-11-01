@@ -104,7 +104,7 @@
   };
 
   const experience = globalThis.SesliOkuExperience.create({ state,
-    prepareChunks: () => buildChunks(collectBlocks()), startSession, showUi, updateUi, setStatus, toggleSettings, renderHighlightStyle, sendToBackground, stop });
+    prepareChunks: () => buildChunks(collectBlocks()), startSession, showUi, updateUi, setStatus, toggleSettings, renderHighlightStyle, sendToBackground, stop, togglePlayback, skip, previewWord });
 
   themes.subscribe(applyTheme);
 
@@ -471,6 +471,15 @@
     return preferences.update(patch).catch(error => setStatus(error.message, true));
   }
 
+  function applyAudioPlaybackRate(audio = state.audio) {
+    if (!audio) return;
+    const rate = state.settings.playbackRate;
+    // Loading a resource resets playbackRate to defaultPlaybackRate. Keep both
+    // in sync so a new chunk cannot silently return to 1x after src is set.
+    if (audio.defaultPlaybackRate !== rate) audio.defaultPlaybackRate = rate;
+    if (audio.playbackRate !== rate) audio.playbackRate = rate;
+  }
+
   function receiveSettings(next) {
     const previous = state.settings;
     if (JSON.stringify(previous) === JSON.stringify(next)) return;
@@ -481,7 +490,7 @@
       state.followReading = next.autoFollow;
       state.lastManualScrollAt = next.autoFollow ? 0 : performance.now();
     }
-    if (state.audio) state.audio.playbackRate = next.playbackRate;
+    applyAudioPlaybackRate();
     experience.invalidate();
     const speechChanged = ["voice", "rate", "pitch", "volume", "autoVoice", "turkishVoice", "englishVoice", "pronunciationRules"].some(key => JSON.stringify(previous[key]) !== JSON.stringify(next[key]));
     if (speechChanged) {
@@ -1755,6 +1764,25 @@
     });
   }
 
+  function previewWord(index, offsets) {
+    const chunk=state.chunks[index];if(!chunk)return;
+    const activeHighlight=CSS.highlights?.get(WORD_HIGHLIGHT);
+    highlight(chunk.el);
+    const range=buildWordRanges(chunk,[{text:chunk.text.slice(offsets.start,offsets.end)}],[offsets])?.[0];
+    if(!range)return;
+    const wordHighlight=activeHighlight||new Highlight();wordHighlight.clear();wordHighlight.add(range);CSS.highlights.set(WORD_HIGHLIGHT,wordHighlight);
+    if(state.settings.autoFollow&&!experience.focusOpen()){
+      const view=getReadingViewport(chunk.el);const rect=range.getBoundingClientRect();const room=view.bottom-view.top;
+      if(room>=rect.height+4){
+        const margin=Math.min(12,(room-rect.height)/4);let delta=0;
+        if(rect.top<view.top+margin)delta=rect.top-view.top-margin;
+        else if(rect.bottom>view.bottom-margin)delta=rect.bottom-view.bottom+margin;
+        if(delta){state.autoScrollUntil=performance.now()+2000;scrollReading(view.container,delta,'instant');}
+      }
+    }
+    showSpotlight(range,true,false);
+  }
+
   // ---------------------------------------------------------------- playback
 
   function playResult(result, session, chunk) {
@@ -1785,7 +1813,7 @@
       state.audios.add(audio);
 
       const onTimeUpdate = () => {
-        if (session !== state.session || !state.playing || checkSleepDeadline()) return;
+        if (session !== state.session || !state.playing || checkSleepDeadline() || experience.scrubbing()) return;
         experience.updateProgress();
         experience.save();
         if (experience.loopTick(audio,result)) return;
@@ -1828,11 +1856,11 @@
         resolve(value?.blocked ? { blocked: true } : {});
       };
 
-      audio.onloadedmetadata = () => { if (session === state.session) { experience.metadata(audio, result); onTimeUpdate(); } };
+      audio.onloadedmetadata = () => { if (session === state.session) { applyAudioPlaybackRate(audio); experience.metadata(audio, result); onTimeUpdate(); } };
       audio.onended = finish;
       audio.onerror = finish;
       audio.ontimeupdate = onTimeUpdate;
-      audio.playbackRate = state.settings.playbackRate;
+      applyAudioPlaybackRate(audio);
 
       audio.src = url;
       audio.play().catch((error) => {
@@ -2553,6 +2581,8 @@
           wordText: range?.toString() || "",
           chunks: state.chunks.map(chunk => ({ id: chunk.el?.id, text: chunk.text })),
           settings: { ...state.settings },
+          audioState: state.audio ? {rate:state.audio.playbackRate,defaultRate:state.audio.defaultPlaybackRate,currentTime:state.audio.currentTime,duration:state.audio.duration,readyState:state.audio.readyState,paused:state.audio.paused} : null,
+          speedLabel: state.ui?.speed.textContent,
           sleepTimer: state.sleepTimer ? { mode: state.sleepTimer.mode, deadline: state.sleepTimer.deadline } : null,
           gapWaiting: state.gapWaiting,
           testRequests: state.testRequests,
