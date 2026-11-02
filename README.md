@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="icons/icon128.png" alt="Sesli Oku" width="96" height="96" />
+<img src="icons/icon128.png" alt="Read Aloud: Natural Voices" width="96" height="96" />
 
-# Sesli Oku
+# Read Aloud: Natural Voices
 
 **Microsoft Edge için Linux'ta Read Aloud.**
 
@@ -23,13 +23,13 @@ Manifest V3 eklentisi. API anahtarı yok, hesap yok, kurulum derdi yok.
 ---
 
 <p align="center">
-  <img src="store/screenshots/01-sayfa.png" alt="Sesli Oku gerçek bir blog yazısını okurken" width="100%" />
+  <img src="store/screenshots/01-sayfa.png" alt="Read Aloud: Natural Voices gerçek bir blog yazısını okurken" width="100%" />
 </p>
 
-## Neden Sesli Oku?
+## Neden Read Aloud: Natural Voices?
 
 Microsoft Edge'in **Read Aloud** özelliği Windows ve macOS'ta var; **Linux'ta yok.**
-Edge Linux'ta ne menüde ne de sağ tık menüsünde bu özellik bulunuyor. Sesli Oku,
+Edge Linux'ta ne menüde ne de sağ tık menüsünde bu özellik bulunuyor. Read Aloud: Natural Voices,
 Edge'in kendi Read Aloud servisini doğrudan kullanarak bu boşluğu dolduruyor:
 
 - Aynı Microsoft neural sesleri (Türkçe **Emel** ve **Ahmet** dahil)
@@ -67,7 +67,7 @@ Edge'in kendi Read Aloud servisini doğrudan kullanarak bu boşluğu dolduruyor:
       <sub>Gerçek bir blog yazısında paragraf ve kelime vurgusu, üst oynatıcı.</sub>
     </td>
     <td width="38%" valign="top">
-      <img src="store/screenshots/02-popup.png" alt="Sesli Oku popup arayüzü" />
+      <img src="store/screenshots/02-popup.png" alt="Read Aloud: Natural Voices popup arayüzü" />
       <br />
       <sub>Popuptan ses, hız ve seçimden devam ayarları.</sub>
     </td>
@@ -85,18 +85,18 @@ Edge'in kendi Read Aloud servisini doğrudan kullanarak bu boşluğu dolduruyor:
 ### Yöntem 1 — Kaynak klasörden (önerilen)
 
 ```bash
-git clone https://github.com/baturkacamak/edge-read-aloud.git
-cd edge-read-aloud
+git clone https://github.com/baturkacamak/read-aloud-natural-voices.git
+cd read-aloud-natural-voices
 ```
 
 1. `edge://extensions` adresini açın.
 2. Sağ alttan **Geliştirici modu**nu açın.
 3. **Paketlenmemiş öğe yükle** ile bu klasörü seçin.
-4. Araç çubuğundaki **Sesli Oku** simgesini sabitleyin.
+4. Araç çubuğundaki **Read Aloud: Natural Voices** simgesini sabitleyin.
 
 ### Yöntem 2 — Hazır ZIP
 
-[Son sürümü indirin](https://github.com/baturkacamak/edge-read-aloud/releases/latest),
+[Son sürümü indirin](https://github.com/baturkacamak/read-aloud-natural-voices/releases/latest),
 ZIP'i açın ve `edge://extensions` → **Paketlenmemiş öğe yükle** ile çıkan klasörü
 seçin.
 
@@ -563,7 +563,7 @@ etkindir.
 ### Proje yapısı
 
 ```text
-edge-read-aloud/
+read-aloud-natural-voices/
 ├── manifest.json
 ├── src/
 │   ├── background.js
